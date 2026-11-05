@@ -248,3 +248,46 @@ body.request-picker-open {overflow:hidden}
   .bubble .table-viewport {max-height:300px}
   .bubble .table-frame th,.bubble .table-frame td {min-width:85px;max-width:230px}
 }
+
+/* V6 - business-centered comparison cards and traceable restriction clusters */
+.allocation-grid,.fulfillment-grid,.efficiency-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;min-width:0}
+.allocation-subcard,.fulfillment-panel,.efficiency-subcard {min-width:0;border:1px solid #dbe8df;border-radius:12px;background:#fff;padding:14px}
+.allocation-subcard h4,.fulfillment-panel h4,.efficiency-subcard h4 {font-size:14px;color:#2d6758;margin:0 0 14px;font-weight:800}
+.allocation-subcard .viz-svg {min-width:0}
+.fulfillment-grid {max-width:100%;justify-content:center;align-items:stretch}
+.fulfillment-panel {text-align:center}
+.fulfillment-progress {background:#e6eeea;border-radius:999px;height:23px;overflow:hidden;margin:14px auto 12px;max-width:520px}
+.fulfillment-progress span {display:block;background:#2e806c;height:100%;border-radius:inherit;transition:width .25s}
+.fulfillment-stats {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;text-align:left}
+.fulfillment-stats span {font-size:12px;color:#587269;padding:9px 11px;background:#f3f8f4;border-radius:8px}
+.fulfillment-stats strong {display:block;font-size:16px;color:#255e50;margin-top:3px}
+.efficiency-table-wrap {overflow-x:auto;width:100%;border-radius:9px;border:1px solid #e1eae3}
+.efficiency-table-wrap table {width:100%;min-width:425px;border-collapse:collapse;font-size:11px;line-height:1.45}
+.efficiency-table-wrap th,.efficiency-table-wrap td {padding:9px 7px;border-bottom:1px solid #e6ede7;text-align:left;white-space:normal;word-break:break-word}
+.efficiency-table-wrap thead th {background:#edf4ee;color:#365f50}
+.efficiency-table-wrap tbody th {color:#3a6b5a}
+.reason-groups {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.reason-group {min-width:0;background:#fff;border:1px solid #dce8e1;padding:12px;border-radius:11px}
+.reason-group-heading {display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px;color:#315e50}
+.reason-group-heading strong {font-size:13px}
+.reason-group-heading span {font-size:12px;font-weight:750;white-space:nowrap}
+.reason-group-meter {background:#e8eeea;height:9px;border-radius:10px;overflow:hidden;margin:0 0 11px}
+.reason-group-meter span {display:block;height:100%;background:#4d9080;border-radius:10px}
+.reason-group-companies b {display:block;color:#587369;font-size:11px;margin-bottom:7px}
+.reason-group-companies div {display:flex;flex-wrap:wrap;gap:6px}
+.reason-company {font-size:11px;color:#2d6656;background:#edf5ef;padding:5px 8px;border-radius:7px;line-height:1.45;overflow-wrap:anywhere}
+.reason-group-note {color:#778b7e;font-size:11px;margin:10px 1px 0}
+.supplier-picker-field {grid-column:span 2}
+@media(max-width:760px) {
+  .allocation-grid,.fulfillment-grid,.efficiency-grid,.reason-groups {grid-template-columns:minmax(0,1fr)}
+  .allocation-subcard,.fulfillment-panel,.efficiency-subcard {padding:11px}
+  .fulfillment-stats strong {font-size:14px}
+}
+/* Readability: independent schemes use full-width panels; no compressed company names. */
+.allocation-grid,.efficiency-grid {grid-template-columns:minmax(0,1fr)}
+
+.efficiency-bars {display:grid;gap:9px;margin:0 0 14px}
+.efficiency-bar-row {display:grid;grid-template-columns:56px minmax(0,1fr) 56px;align-items:center;gap:9px;color:#4c695c;font-size:12px}
+.efficiency-bar-row b {text-align:right;color:#296453;font-variant-numeric:tabular-nums}
+.efficiency-bar-track {height:12px;background:#e3ebe5;border-radius:8px;overflow:hidden}
+.efficiency-bar-track i {display:block;height:100%;background:#38826e;border-radius:8px}

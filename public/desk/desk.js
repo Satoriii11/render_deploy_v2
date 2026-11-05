@@ -208,12 +208,65 @@ function chartMarkup(charts) {
     const legend=points.map((p,i)=>'<div class="donut-legend-row"><i style="background:'+palette[i%palette.length]+'"></i><span>'+esc(p.label)+'</span><b>'+esc(display(p.value,chart.unit))+'</b></div>').join('');
     return '<div class="donut-layout"><svg class="donut-svg" viewBox="0 0 232 232" role="img" aria-label="'+chartTitle(chart.title)+'"><circle cx="116" cy="116" r="'+r+'" fill="none" stroke="#e9eeea" stroke-width="27"/>'+circles+'<text x="116" y="110" text-anchor="middle" class="donut-total">'+esc(numeric.format(total))+'</text><text x="116" y="134" text-anchor="middle" class="donut-caption">'+esc(chart.unit||"合计")+'</text></svg><div class="donut-legend">'+legend+'</div></div>';
   }
+  // Structured business views keep each optimization scheme visually separate.
+  function splitBarView(chart) {
+    const panels=(chart.plans||[]).map(plan=>{
+      const points=(plan.points||[]).filter(x=>Number.isFinite(Number(x.value)));
+      return '<section class="allocation-subcard"><h4>'+esc(plan.label)+'方案</h4>'+
+        (points.length?'<div class="chart-plot-viewport">'+barSvg({...chart,title:plan.label+"方案",unit:chart.unit},points)+'</div>':'<p class="viz-empty">该方案暂无供应商分配记录。</p>')+
+        '</section>';
+    });
+    return '<div class="allocation-grid">'+panels.join('')+'</div>';
+  }
+  function fulfillmentView(chart) {
+    const panels=(chart.plans||[]).map(plan=>{
+      const total=Math.max(0,Number(plan.total)||0),filled=Math.min(total,Math.max(0,Number(plan.fulfilled)||0));
+      const missing=Math.max(0,total-filled), percent=total?100*filled/total:0;
+      return '<section class="fulfillment-panel"><h4>'+esc(plan.label)+'方案</h4>'+
+        '<div class="fulfillment-progress" role="progressbar" aria-label="'+esc(plan.label)+'方案的保障比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+percent.toFixed(2)+'"><span style="width:'+percent.toFixed(2)+'%"></span></div>'+
+        '<div class="fulfillment-stats"><span>总需求 <strong>'+esc(display(total,"件"))+'</strong></span><span>可保障 <strong>'+esc(display(filled,"件"))+'</strong></span><span>剩余缺口 <strong>'+esc(display(missing,"件"))+'</strong></span><span>满足率 <strong>'+percent.toFixed(1)+'%</strong></span></div>'+
+        '</section>';
+    });
+    return '<div class="fulfillment-grid">'+panels.join('')+'</div>';
+  }
+  function efficiencyView(chart) {
+    const usable = value=>value!==null&&value!==undefined&&value!==""&&Number.isFinite(Number(value));
+    const fmtUnit = value=>usable(value)?numeric.format(Number(value))+" 元/件":"—";
+    const fmtPercent = value=>usable(value)?Number(value).toFixed(1)+"%":"—";
+    const panels=(chart.plans||[]).map(plan=>{
+      const row=(label,info)=>{
+        const fulfilled=usable(info.fulfilled)?display(info.fulfilled,"件"):"—";
+        const shortage=usable(info.shortage)?display(info.shortage,"件"):"—";
+        return '<tr><th scope="row">'+label+'</th><td>'+esc(display(plan.demand,"件"))+'</td><td>'+esc(fulfilled)+'</td><td>'+esc(shortage)+'</td><td>'+esc(fmtPercent(info.rate))+'</td><td>'+esc(fmtUnit(info.unitCost))+'</td></tr>';
+      };
+      const rateBar=(label,info)=>{
+        const known=usable(info.rate),rate=known?Math.max(0,Math.min(100,Number(info.rate))):0;
+        return '<div class="efficiency-bar-row"><span>'+label+'</span><div class="efficiency-bar-track" role="meter" aria-label="'+esc(plan.label+label)+'满足率" aria-valuemin="0" aria-valuemax="100" '+(known?'aria-valuenow="'+rate.toFixed(2)+'"':'aria-valuetext="暂无有效数据"')+'><i style="width:'+rate.toFixed(2)+'%"></i></div><b>'+esc(fmtPercent(info.rate))+'</b></div>';
+      };
+      return '<section class="efficiency-subcard"><h4>'+esc(plan.label)+'方案</h4><div class="efficiency-bars">'+rateBar('断供前',plan.before||{})+rateBar('断供后',plan.after||{})+'</div><div class="efficiency-table-wrap"><table><thead><tr><th>情景</th><th>总需求</th><th>已保障</th><th>缺口</th><th>满足率</th><th>单位保障成本</th></tr></thead><tbody>'+row('断供前',plan.before||{})+row('断供后',plan.after||{})+'</tbody></table></div></section>';
+    });
+    return '<div class="efficiency-grid">'+panels.join('')+'</div>';
+  }
+  function reasonGroupView(chart) {
+    const groups=Array.isArray(chart.groups)?chart.groups:[];
+    const peak=Math.max(1,...groups.map(item=>Number(item.count)||0));
+    return '<div class="reason-groups">'+groups.map(group=>{
+      const value=Math.max(0,Number(group.count)||0);
+      return '<section class="reason-group"><div class="reason-group-heading"><strong>'+esc(group.category)+'</strong><span>'+esc(display(value,"条报价"))+'</span></div>'+
+        '<div class="reason-group-meter" aria-hidden="true"><span style="width:'+(value/peak*100).toFixed(2)+'%"></span></div>'+
+        '<div class="reason-group-companies"><b>涉及企业</b><div>'+((group.companies||[]).map(name=>'<span class="reason-company">'+esc(name)+'</span>').join('')||'<span>企业信息待核实</span>')+'</div></div>'+
+        '</section>';
+    }).join('')+'</div><p class="reason-group-note">同一报价可能涉及多个原因类别，类别数量不可直接求和。</p>';
+  }
   const cards=(Array.isArray(charts)?charts:[]).map(chart=>{
-    const points=(Array.isArray(chart.points)?chart.points:[]).filter(point=>Number.isFinite(Number(point.value)));
-    if (!points.length) return '';
     const type=chart.type || "bar";
-    const body=type==="line" ? lineSvg(chart,points) : type==="donut" ? donutSvg(chart,points) : '<div class="chart-plot-viewport">'+barSvg(chart,points)+'</div>';
-    return '<figure class="metric-chart '+(type==="donut"?'chart-donut':'')+'"><figcaption>'+chartTitle(chart.title)+'</figcaption>'+body+'</figure>';
+    const points=(Array.isArray(chart.points)?chart.points:[]).filter(point=>Number.isFinite(Number(point.value)));
+    if (!points.length && !["splitBar","fulfillment","efficiency","reasonGroups"].includes(type)) return '';
+    const body= type==="splitBar" ? splitBarView(chart) : type==="fulfillment" ? fulfillmentView(chart) :
+      type==="efficiency" ? efficiencyView(chart) : type==="reasonGroups" ? reasonGroupView(chart) :
+      type==="line" ? lineSvg(chart,points) : type==="donut" ? donutSvg(chart,points) :
+      '<div class="chart-plot-viewport">'+barSvg(chart,points)+'</div>';
+    return '<figure class="metric-chart chart-'+type+'"><figcaption>'+chartTitle(chart.title)+'</figcaption>'+body+'</figure>';
   }).filter(Boolean);
   return cards.length?'<section class="metric-grid" aria-label="统计图表">'+cards.join('')+'</section>':'';
 }
@@ -293,7 +346,7 @@ function addMessage(role, text, {sample=false, error=false, scenario=null, previ
       visual.onclick = () => {
         const content = bubble.cloneNode(true);
         content.querySelector(".message-tools")?.remove();
-        const style = `@page{size:A4;margin:17mm}body{font:13px/1.7 "Microsoft YaHei",sans-serif;color:#1d3540;margin:0 auto;max-width:950px}h3{color:#295c51;margin-top:20px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #dae5da;padding:6px;text-align:left}th{background:#edf4ed}.table-wrap{overflow-wrap:break-word;margin:12px 0;overflow-x:auto}.kpi-grid{display:flex;gap:10px;flex-wrap:wrap}.kpi-card{padding:10px;border:1px solid #dfe8df;border-radius:8px}.kpi-card span,.kpi-card strong{display:block}.kpi-card strong{font-size:20px;color:#2e806c}.metric-grid{display:grid;grid-template-columns:1fr;gap:12px}.metric-chart{border:1px solid #e1e9e1;padding:12px;break-inside:avoid;margin:10px 0}.metric-chart figcaption{font-weight:bold}.viz-svg{width:100%;max-height:680px}.svg-label,.svg-value{font-size:11px;fill:#38534d}.svg-tick{font-size:10px;fill:#77867e}.donut-layout{display:flex;gap:18px;align-items:center}.donut-svg{width:190px}.donut-total{font-size:29px;font-weight:bold}.donut-caption{font-size:12px}.donut-legend{flex:1}.donut-legend-row{display:flex;gap:8px;margin:6px 0}.donut-legend-row i{display:block;width:10px;height:10px;flex:none}.donut-legend-row b{margin-left:auto}.purchase-advice{margin-top:12px;padding:10px;border-left:3px solid #2e806c;background:#f3f7f4}.message-meta{color:#55786a;font-size:12px;margin-bottom:10px}.sample-mark{color:#986833}.table-frame{margin:10px 0;overflow:visible;border:0}.table-viewport{max-height:none!important;overflow:visible!important}.table-x-track{display:none!important}.table-frame table{width:100%;table-layout:fixed;white-space:normal!important;font-size:9px}.table-frame th,.table-frame td{white-space:normal!important;overflow-wrap:anywhere;word-break:break-word;min-width:0!important;max-width:none!important;vertical-align:top}.chart-plot-viewport{max-height:none!important;overflow:visible!important}.viz-svg{max-height:none!important}`;
+        const style = `@page{size:A4;margin:17mm}body{font:13px/1.7 "Microsoft YaHei",sans-serif;color:#1d3540;margin:0 auto;max-width:950px}h3{color:#295c51;margin-top:20px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #dae5da;padding:6px;text-align:left}th{background:#edf4ed}.table-wrap{overflow-wrap:break-word;margin:12px 0;overflow-x:auto}.kpi-grid{display:flex;gap:10px;flex-wrap:wrap}.kpi-card{padding:10px;border:1px solid #dfe8df;border-radius:8px}.kpi-card span,.kpi-card strong{display:block}.kpi-card strong{font-size:20px;color:#2e806c}.metric-grid{display:grid;grid-template-columns:1fr;gap:12px}.metric-chart{border:1px solid #e1e9e1;padding:12px;break-inside:avoid;margin:10px 0}.metric-chart figcaption{font-weight:bold}.viz-svg{width:100%;max-height:680px}.svg-label,.svg-value{font-size:11px;fill:#38534d}.svg-tick{font-size:10px;fill:#77867e}.donut-layout{display:flex;gap:18px;align-items:center}.donut-svg{width:190px}.donut-total{font-size:29px;font-weight:bold}.donut-caption{font-size:12px}.donut-legend{flex:1}.donut-legend-row{display:flex;gap:8px;margin:6px 0}.donut-legend-row i{display:block;width:10px;height:10px;flex:none}.donut-legend-row b{margin-left:auto}.purchase-advice{margin-top:12px;padding:10px;border-left:3px solid #2e806c;background:#f3f7f4}.message-meta{color:#55786a;font-size:12px;margin-bottom:10px}.sample-mark{color:#986833}.table-frame{margin:10px 0;overflow:visible;border:0}.table-viewport{max-height:none!important;overflow:visible!important}.table-x-track{display:none!important}.table-frame table{width:100%;table-layout:fixed;white-space:normal!important;font-size:9px}.table-frame th,.table-frame td{white-space:normal!important;overflow-wrap:anywhere;word-break:break-word;min-width:0!important;max-width:none!important;vertical-align:top}.chart-plot-viewport{max-height:none!important;overflow:visible!important}.viz-svg{max-height:none!important}.allocation-grid,.fulfillment-grid,.efficiency-grid{display:grid;grid-template-columns:1fr;gap:12px}.allocation-subcard,.fulfillment-panel,.efficiency-subcard,.reason-group{padding:12px;border:1px solid #d8e8dd;border-radius:9px;break-inside:avoid}.fulfillment-progress,.reason-group-meter{height:18px;background:#e6eee9;border-radius:9px;overflow:hidden}.fulfillment-progress span,.reason-group-meter span{display:block;height:100%;background:#2e806c}.fulfillment-stats{display:flex;flex-wrap:wrap;gap:15px;margin-top:10px}.reason-group-companies div{display:flex;flex-wrap:wrap;gap:5px}.reason-company{display:inline-block;padding:3px 8px;background:#eaf2ec;border-radius:5px}.efficiency-table-wrap table{width:100%;font-size:10px}.efficiency-bar-track{height:10px;background:#e2ede6;border-radius:6px}.efficiency-bar-track i{display:block;height:100%;background:#2e806c}.efficiency-bar-row{display:grid;grid-template-columns:60px 1fr 60px;gap:8px;align-items:center}`;
         const html = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>采策采购决策分析</title><style>'+style+'</style></head><body>'+content.innerHTML+'</body></html>';
         const href = URL.createObjectURL(new Blob([html],{type:"text/html;charset=utf-8"}));
         const file = Object.assign(document.createElement("a"),{href,download:fileBase+"-图文决策报告.html"});
@@ -324,18 +377,27 @@ function requestLabel(option) {
   return option.company + " · " + option.product + " · " + option.quantity + "件";
 }
 
-// Popup picker: full-page overlay avoids clipping by the bottom input composer.
+// Shared full-screen picker for procurement requests AND valid suppliers.
+let pickerMode="request";
 let requestPickerMatches=[];
 let requestPickerActive=-1;
 let requestPickerFocusReturn=null;
-function openRequestPicker() {
+function openRequestPicker(mode="request") {
   if (!optionsReady) return;
+  if (mode==="supplier" && (!values.request_id || supplierLoading || supplierOptionsRequestId!==values.request_id || !supplierOptions.length)) return;
+  pickerMode=mode;
   requestPickerFocusReturn=document.activeElement;
   const modal=$("request-picker");
   modal.hidden=false;
   document.body.classList.add("request-picker-open");
-  const trigger=$("fields").querySelector("[data-request-picker-open]");
-  trigger?.setAttribute("aria-expanded","true");
+  $("fields").querySelector('[data-request-picker-open="'+mode+'"]')?.setAttribute("aria-expanded","true");
+  const isSupplier=mode==="supplier";
+  $("request-picker-heading").textContent=isSupplier?"选择断供企业":"选择采购需求";
+  $("request-picker-description").textContent=isSupplier?"仅显示当前采购需求下的有效候选企业":"搜索企业或产品，也可以浏览全部采购需求";
+  $("request-picker-search-label").textContent=isSupplier?"搜索供应商名称":"搜索公司或产品";
+  $("request-picker-search").placeholder=isSupplier?"例如：长电、三环、蓝普":"例如：南京普天、贴片电阻、10kΩ";
+  $("request-picker-show-all").setAttribute("aria-label",isSupplier?"展开全部候选供应商":"展开全部采购需求");
+  $("request-picker-options").setAttribute("aria-label",isSupplier?"候选供应商列表":"采购需求列表");
   $("request-picker-search").value="";
   requestPickerActive=-1;
   renderRequestPicker();
@@ -346,30 +408,40 @@ function closeRequestPicker() {
   if (!modal || modal.hidden) return;
   modal.hidden=true;
   document.body.classList.remove("request-picker-open");
-  $("fields").querySelector("[data-request-picker-open]")?.setAttribute("aria-expanded","false");
+  $("fields").querySelectorAll("[data-request-picker-open]").forEach(el=>el.setAttribute("aria-expanded","false"));
   const target=requestPickerFocusReturn;
   requestPickerFocusReturn=null;
   if (target?.isConnected && typeof target.focus==="function") target.focus();
-  else $("fields").querySelector("[data-request-picker-open]")?.focus();
+  else $("fields").querySelector('[data-request-picker-open="'+pickerMode+'"]')?.focus();
 }
 function renderRequestPicker() {
   const query=$("request-picker-search").value.trim();
-  requestPickerMatches=procurementOptions.filter(option=>fuzzyMatch(query,[option.company,option.product,requestLabel(option)]));
+  const isSupplier=pickerMode==="supplier";
+  const options=isSupplier?supplierOptions:procurementOptions;
+  requestPickerMatches=options.filter(item=>fuzzyMatch(query,isSupplier?[item.name]:[item.company,item.product,requestLabel(item)]));
   const list=$("request-picker-options");
-  $("request-picker-count").textContent=query ? "匹配 "+requestPickerMatches.length+" 条采购需求" : "全部 "+requestPickerMatches.length+" 条采购需求";
+  const type=isSupplier?"家候选企业":"条采购需求";
+  $("request-picker-count").textContent=(query?"匹配 ":"全部 ")+requestPickerMatches.length+" "+type;
   if (requestPickerActive>=requestPickerMatches.length) requestPickerActive=-1;
-  list.innerHTML=requestPickerMatches.length?requestPickerMatches.map((option,index)=>
-    '<button type="button" class="request-picker-option'+(values.request_id===option.id?' is-selected':'')+(index===requestPickerActive?' is-active':'')+'" data-request-picker-index="'+index+'" role="option" aria-selected="'+(values.request_id===option.id)+'">'+
-    '<span class="request-picker-option-main">'+esc(option.company)+'</span>'+
-    '<span class="request-picker-option-sub">'+esc(option.product)+' · '+esc(option.quantity)+'件</span>'+
-    (values.request_id===option.id?'<span class="request-picker-selected">已选择</span>':'')+'</button>').join('')
-    :'<div class="request-picker-empty">没有匹配的采购需求，请尝试公司名称、产品名称或其中的关键词。</div>';
+  const selectedId=isSupplier?values.disrupted_supplier_id:values.request_id;
+  list.innerHTML=requestPickerMatches.length?requestPickerMatches.map((item,index)=>
+    '<button type="button" class="request-picker-option'+(selectedId===item.id?' is-selected':'')+(index===requestPickerActive?' is-active':'')+'" data-request-picker-index="'+index+'" role="option" aria-selected="'+(selectedId===item.id)+'">'+
+    '<span class="request-picker-option-main">'+esc(isSupplier?item.name:item.company)+'</span>'+
+    (isSupplier?'':'<span class="request-picker-option-sub">'+esc(item.product)+' · '+esc(item.quantity)+'件</span>')+
+    (selectedId===item.id?'<span class="request-picker-selected">已选择</span>':'')+'</button>').join('')
+    :'<div class="request-picker-empty">'+(isSupplier?'当前候选企业中没有匹配项，请更换企业关键词。':'没有匹配的采购需求，请尝试公司名称、产品名称或其中的关键词。')+'</div>';
   list.setAttribute("aria-busy","false");
 }
 function selectRequestPickerOption(index) {
   const option=requestPickerMatches[index];
   if (!option) return;
-  applyRequestOption(option);
+  if (pickerMode==="supplier") {
+    // Only a member of the API-vetted supplier list is accepted.
+    if (supplierOptionsRequestId!==values.request_id || !supplierOptions.some(item=>item.id===option.id)) return;
+    applySupplierOption(null,option);
+    renderFields();
+    closeRequestPicker();
+  } else applyRequestOption(option);
 }
 
 function searchKey(value) {
@@ -408,10 +480,21 @@ function requestPickerField({locked=false}={}) {
   const sub=selected?selected.product+" · "+selected.quantity+"件":(locked?"与本次断供情景关联":"支持搜索企业或产品，并可展开浏览全部选项");
   const disabled=locked || !optionsReady;
   return '<div class="field request-picker-field"><span>采购需求</span>'+
-    '<button class="request-picker-trigger" type="button" data-request-picker-open aria-haspopup="dialog" aria-controls="request-picker" aria-expanded="false" '+(disabled?'disabled':'')+'>'+
+    '<button class="request-picker-trigger" type="button" data-request-picker-open="request" aria-haspopup="dialog" aria-controls="request-picker" aria-expanded="false" '+(disabled?'disabled':'')+'>'+
     '<span class="request-picker-text"><strong>'+esc(main)+'</strong><small>'+esc(sub)+'</small></span>'+
     '<span class="request-picker-arrow" aria-hidden="true">'+(locked?'🔒':'⌄')+'</span></button>'+
     '<input type="hidden" name="request_id" value="'+esc(values.request_id)+'"></div>';
+}
+
+function supplierPickerField() {
+  const option=supplierOptions.find(item=>item.id===values.disrupted_supplier_id);
+  const disabled=!optionsReady || !values.request_id || supplierLoading || supplierOptionsRequestId!==values.request_id || !supplierOptions.length;
+  const name=option?.name || (!values.request_id?"请先选择采购需求":supplierLoading?"正在读取当前需求的候选企业…":!supplierOptions.length?"当前采购需求暂无可选供应商":"点击选择断供企业");
+  return '<div class="field request-picker-field supplier-picker-field"><span>断供企业</span>'+
+    '<button class="request-picker-trigger" type="button" data-request-picker-open="supplier" aria-haspopup="dialog" aria-controls="request-picker" aria-expanded="false" '+(disabled?'disabled':'')+'>'+
+    '<span class="request-picker-text"><strong>'+esc(name)+'</strong><small>'+esc(option?"已选择当前采购需求的有效候选供应商":"支持模糊搜索企业名称或浏览完整候选列表")+'</small></span>'+
+    '<span class="request-picker-arrow" aria-hidden="true">⌄</span></button>'+
+    '<input type="hidden" name="disrupted_supplier_id" value="'+esc(values.disrupted_supplier_id)+'"></div>';
 }
 
 function comboField(name, label, {locked=false, placeholder=""}={}) {
@@ -606,9 +689,12 @@ function applySupplierOption(root, option) {
   values.disrupted_supplier_id = option.id;
   comboLabels.disrupted_supplier_id = option.name;
   comboQueries.disrupted_supplier_id = option.name;
-  root.querySelector('[data-combo-input="disrupted_supplier_id"]').value = option.name;
-  root.querySelector('[data-combo-value="disrupted_supplier_id"]').value = option.id;
-  closeCombo(root);
+  if (root) {
+    root.querySelector('[data-combo-input="disrupted_supplier_id"]')?.setAttribute("value",option.name);
+    const hidden=root.querySelector('[data-combo-value="disrupted_supplier_id"]');
+    if (hidden) hidden.value=option.id;
+    closeCombo(root);
+  }
   syncRunButton();
 }
 
@@ -660,7 +746,7 @@ function renderFields() {
   let fields = requestPickerField({locked:requestLocked});
   if (!fromDisruption) fields += field("evaluation_date","评估日期（选填）",'type="date"');
   if (active.id === "disruption_sim") {
-    fields += comboField("disrupted_supplier_id","断供企业");
+    fields += supplierPickerField();
     fields += field("disruption_rate","断供比例（0–1）",'type="number" required min="0.001" max="1" step="any"');
   }
   if (active.id === "shortage_recovery") {
@@ -821,7 +907,8 @@ $("backdrop").onclick = () => sidebar(false);
 const viewport = matchMedia("(max-width:750px)");
 viewport.addEventListener("change",()=>sidebar(!viewport.matches));
 $("fields").addEventListener("click",event=>{
-  if (event.target.closest("[data-request-picker-open]")) openRequestPicker();
+  const picker=event.target.closest("[data-request-picker-open]");
+  if (picker) openRequestPicker(picker.dataset.requestPickerOpen||"request");
 });
 $("request-picker-close").addEventListener("click",closeRequestPicker);
 $("request-picker-backdrop").addEventListener("click",closeRequestPicker);
@@ -1000,7 +1087,9 @@ $("run-form").addEventListener("submit", async event => {
   const selected = active;
   const requestLocked = selected.id === "quote_delivery" || (selected.id === "shortage_recovery" && values.shortage_source === "simulation");
   if (!requestLocked && !ensureComboSelection("request_id")) return;
-  if (selected.id === "disruption_sim" && !ensureComboSelection("disrupted_supplier_id")) return;
+  if (selected.id === "disruption_sim" && (supplierOptionsRequestId!==values.request_id || !supplierOptions.some(item=>item.id===values.disrupted_supplier_id))) {
+    openRequestPicker("supplier");return;
+  }
   const requestId = values.request_id;
   if (!requestId || !procurementOptions.some(item=>item.id===requestId)) {
     addMessage("assistant","请选择有效的采购需求后再运行。",{error:true});
