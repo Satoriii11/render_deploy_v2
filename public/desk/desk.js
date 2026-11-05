@@ -48,14 +48,14 @@ function markdown(text) {
     if (line.startsWith("|") && /^\s*\|\s*[:\- ]+/.test(lines[i+1] || "")) {
       closeList();
       const cells = row => row.trim().replace(/^\||\|$/g,"").split("|").map(x=>inline(x.trim()));
-      parts.push('<div class="table-wrap"><table><thead><tr>' + cells(line).map(x=>"<th>"+x+"</th>").join("") + "</tr></thead><tbody>");
+      parts.push('<div class="table-frame"><div class="table-viewport" tabindex="0" aria-label="数据表格，可上下滚动"><table><thead><tr>' + cells(line).map(x=>"<th>"+x+"</th>").join("") + "</tr></thead><tbody>");
       i += 2;
       while (i < lines.length && lines[i].trim().startsWith("|")) {
         parts.push("<tr>"+cells(lines[i]).map(x=>"<td>"+x+"</td>").join("")+"</tr>");
         i++;
       }
       i--;
-      parts.push("</tbody></table></div>");
+      parts.push('</tbody></table></div><div class="table-x-track" role="scrollbar" aria-label="表格横向滚动" aria-orientation="horizontal" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><div class="table-x-thumb"></div></div></div>');
       continue;
     }
     const bullet = line.match(/^([-•*]|\d+\.)\s+(.+)/);
@@ -74,6 +74,73 @@ function markdown(text) {
   return parts.join("");
 }
 
+// Fixed-height table with a continuously visible, draggable horizontal scrollbar.
+function enableTableFrames(scope) {
+  for (const frame of scope.querySelectorAll(".table-frame")) {
+    const viewport=frame.querySelector(".table-viewport");
+    const track=frame.querySelector(".table-x-track");
+    const thumb=track.querySelector(".table-x-thumb");
+    const table=viewport.querySelector("table");
+    const sync=()=>{
+      const maxScroll=Math.max(0,viewport.scrollWidth-viewport.clientWidth);
+      const ratio=viewport.clientWidth/Math.max(1,viewport.scrollWidth);
+      const trackW=track.clientWidth;
+      const thumbW=Math.max(28,Math.min(trackW,trackW*ratio));
+      const left=maxScroll?viewport.scrollLeft/maxScroll*(trackW-thumbW):0;
+      thumb.style.width=thumbW+"px";
+      thumb.style.left=left+"px";
+      track.classList.toggle("no-overflow",maxScroll<1);
+      track.setAttribute("aria-valuenow",String(maxScroll?Math.round(viewport.scrollLeft/maxScroll*100):0));
+      track.setAttribute("aria-valuetext",maxScroll?"已查看横向内容的"+Math.round(viewport.scrollLeft/maxScroll*100)+"%":"表格全部可见");
+    };
+    viewport.addEventListener("scroll",sync,{passive:true});
+    track.addEventListener("pointerdown",event=>{
+      const maxScroll=Math.max(0,viewport.scrollWidth-viewport.clientWidth);
+      if (!maxScroll) return;
+      event.preventDefault();
+      const trackRect=track.getBoundingClientRect();
+      const thumbRect=thumb.getBoundingClientRect();
+      const dragThumb=event.target===thumb;
+      const dragOffset=dragThumb?event.clientX-thumbRect.left:thumbRect.width/2;
+      const move=clientX=>{
+        const travel=Math.max(1,trackRect.width-thumbRect.width);
+        const next=Math.max(0,Math.min(travel,clientX-trackRect.left-dragOffset));
+        viewport.scrollLeft=next/travel*maxScroll;
+        sync();
+      };
+      move(event.clientX);
+      track.setPointerCapture(event.pointerId);
+      const onMove=e=>move(e.clientX);
+      const onUp=e=>{
+        try{track.releasePointerCapture(e.pointerId);}catch{}
+        track.removeEventListener("pointermove",onMove);
+        track.removeEventListener("pointerup",onUp);
+        track.removeEventListener("pointercancel",onUp);
+      };
+      track.addEventListener("pointermove",onMove);
+      track.addEventListener("pointerup",onUp);
+      track.addEventListener("pointercancel",onUp);
+    });
+    track.addEventListener("keydown",event=>{
+      const maxScroll=Math.max(0,viewport.scrollWidth-viewport.clientWidth);
+      if (!maxScroll) return;
+      let delta=0;
+      if (event.key==="ArrowRight") delta=90;
+      if (event.key==="ArrowLeft") delta=-90;
+      if (event.key==="PageDown") delta=viewport.clientWidth*.8;
+      if (event.key==="PageUp") delta=-viewport.clientWidth*.8;
+      if (event.key==="Home") delta=-maxScroll;
+      if (event.key==="End") delta=maxScroll;
+      if (delta) {event.preventDefault();viewport.scrollLeft=Math.max(0,Math.min(maxScroll,viewport.scrollLeft+delta));sync();}
+    });
+    if (typeof ResizeObserver!=="undefined") {
+      const observer=new ResizeObserver(sync);
+      observer.observe(viewport);observer.observe(table);
+    }
+    requestAnimationFrame(sync);
+  }
+}
+
 function chartMarkup(charts) {
   const palette = ["#2e806c","#6088ba","#e5a25c","#9177b2","#65a4a0","#c77375","#89966a"];
   const numeric = new Intl.NumberFormat("zh-CN",{maximumFractionDigits:2});
@@ -81,20 +148,37 @@ function chartMarkup(charts) {
   const chartTitle = value => esc(value || "指标图表");
   const pct = (n,d) => d > 0 ? Math.max(0,n/d) : 0;
   const maxValue = values => Math.max(1,...values.map(p=>Math.max(0,Number(p.value)||0)));
-  function barSvg(chart,points) {
-    const count=points.length, h=52+count*40, max=maxValue(points);
-    const labelW=204, left=labelW+11, plot=310, scale=plot/max;
-    let shapes='';
-    for (const [index,point] of points.entries()) {
-      const v=Math.max(0,Number(point.value)||0),y=43+index*40;
-      const short=point.label.length>15 ? point.label.slice(0,14)+"…" : point.label;
-      shapes += '<g><title>'+esc(point.label+" · "+display(v,chart.unit))+'</title>'+ 
-        '<text x="'+(labelW-5)+'" y="'+(y+15)+'" text-anchor="end" class="svg-label">'+esc(short)+'</text>'+
-        '<rect x="'+left+'" y="'+y+'" width="'+plot+'" height="20" rx="5" fill="#e7eeeb"/>'+
-        '<rect x="'+left+'" y="'+y+'" width="'+Math.max(v?2:0,v*scale).toFixed(2)+'" height="20" rx="5" fill="'+palette[index%palette.length]+'"/>'+
-        '<text x="'+(left+plot+11)+'" y="'+(y+15)+'" class="svg-value">'+esc(display(v,chart.unit))+'</text></g>';
+  // Full SVG labels: wrap text into multiple lines rather than truncating with an ellipsis.
+  function wrapSvgLabel(value, maxUnits=28) {
+    const lines=[];
+    let current="", used=0;
+    for (const character of Array.from(String(value ?? ""))) {
+      const units=/[\u2E80-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]/u.test(character)?2:1;
+      if (current && used+units>maxUnits) {lines.push(current);current="";used=0;}
+      current+=character;used+=units;
     }
-    return '<svg class="viz-svg" role="img" aria-label="'+chartTitle(chart.title)+'" viewBox="0 0 640 '+h+'" preserveAspectRatio="xMinYMin meet">'+shapes+'</svg>';
+    if (current) lines.push(current);
+    return lines.length?lines:["—"];
+  }
+  function barSvg(chart,points) {
+    const labelW=242, left=labelW+12, plot=288, heightUnit=16;
+    const prepared=points.map(point=>({...point,labelLines:wrapSvgLabel(point.label)}));
+    const heights=prepared.map(point=>Math.max(44,point.labelLines.length*heightUnit+18));
+    const h=42+heights.reduce((a,b)=>a+b,0)+16, max=maxValue(points), scale=plot/max;
+    let shapes='',cursor=35;
+    for (const [index,point] of prepared.entries()) {
+      const v=Math.max(0,Number(point.value)||0);
+      const rowHeight=heights[index],mid=cursor+rowHeight/2;
+      const firstBaseline=mid-(point.labelLines.length-1)*heightUnit/2+4;
+      const label=point.labelLines.map((line,i)=>'<tspan x="'+(labelW-6)+'" dy="'+(i?heightUnit:0)+'">'+esc(line)+'</tspan>').join('');
+      shapes += '<g><title>'+esc(point.label+" · "+display(v,chart.unit))+'</title>'+
+        '<text x="'+(labelW-6)+'" y="'+firstBaseline+'" text-anchor="end" class="svg-label">'+label+'</text>'+
+        '<rect x="'+left+'" y="'+(mid-10)+'" width="'+plot+'" height="20" rx="5" fill="#e7eeeb"/>'+
+        '<rect x="'+left+'" y="'+(mid-10)+'" width="'+Math.max(v?2:0,v*scale).toFixed(2)+'" height="20" rx="5" fill="'+palette[index%palette.length]+'"/>'+
+        '<text x="'+(left+plot+12)+'" y="'+(mid+4)+'" class="svg-value">'+esc(display(v,chart.unit))+'</text></g>';
+      cursor+=rowHeight;
+    }
+    return '<svg class="viz-svg" role="img" aria-label="'+chartTitle(chart.title)+'" viewBox="0 0 650 '+h+'" preserveAspectRatio="xMinYMin meet">'+shapes+'</svg>';
   }
   function lineSvg(chart,points) {
     const width=640,height=260, left=58,right=620,top=24,bottom=204;
@@ -128,7 +212,7 @@ function chartMarkup(charts) {
     const points=(Array.isArray(chart.points)?chart.points:[]).filter(point=>Number.isFinite(Number(point.value)));
     if (!points.length) return '';
     const type=chart.type || "bar";
-    const body=type==="line" ? lineSvg(chart,points) : type==="donut" ? donutSvg(chart,points) : barSvg(chart,points);
+    const body=type==="line" ? lineSvg(chart,points) : type==="donut" ? donutSvg(chart,points) : '<div class="chart-plot-viewport">'+barSvg(chart,points)+'</div>';
     return '<figure class="metric-chart '+(type==="donut"?'chart-donut':'')+'"><figcaption>'+chartTitle(chart.title)+'</figcaption>'+body+'</figure>';
   }).filter(Boolean);
   return cards.length?'<section class="metric-grid" aria-label="统计图表">'+cards.join('')+'</section>':'';
@@ -209,7 +293,7 @@ function addMessage(role, text, {sample=false, error=false, scenario=null, previ
       visual.onclick = () => {
         const content = bubble.cloneNode(true);
         content.querySelector(".message-tools")?.remove();
-        const style = `@page{size:A4;margin:17mm}body{font:13px/1.7 "Microsoft YaHei",sans-serif;color:#1d3540;margin:0 auto;max-width:950px}h3{color:#295c51;margin-top:20px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #dae5da;padding:6px;text-align:left}th{background:#edf4ed}.table-wrap{overflow-wrap:break-word;margin:12px 0;overflow-x:auto}.kpi-grid{display:flex;gap:10px;flex-wrap:wrap}.kpi-card{padding:10px;border:1px solid #dfe8df;border-radius:8px}.kpi-card span,.kpi-card strong{display:block}.kpi-card strong{font-size:20px;color:#2e806c}.metric-grid{display:grid;grid-template-columns:1fr;gap:12px}.metric-chart{border:1px solid #e1e9e1;padding:12px;break-inside:avoid;margin:10px 0}.metric-chart figcaption{font-weight:bold}.viz-svg{width:100%;max-height:680px}.svg-label,.svg-value{font-size:11px;fill:#38534d}.svg-tick{font-size:10px;fill:#77867e}.donut-layout{display:flex;gap:18px;align-items:center}.donut-svg{width:190px}.donut-total{font-size:29px;font-weight:bold}.donut-caption{font-size:12px}.donut-legend{flex:1}.donut-legend-row{display:flex;gap:8px;margin:6px 0}.donut-legend-row i{display:block;width:10px;height:10px;flex:none}.donut-legend-row b{margin-left:auto}.purchase-advice{margin-top:12px;padding:10px;border-left:3px solid #2e806c;background:#f3f7f4}.message-meta{color:#55786a;font-size:12px;margin-bottom:10px}.sample-mark{color:#986833}`;
+        const style = `@page{size:A4;margin:17mm}body{font:13px/1.7 "Microsoft YaHei",sans-serif;color:#1d3540;margin:0 auto;max-width:950px}h3{color:#295c51;margin-top:20px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #dae5da;padding:6px;text-align:left}th{background:#edf4ed}.table-wrap{overflow-wrap:break-word;margin:12px 0;overflow-x:auto}.kpi-grid{display:flex;gap:10px;flex-wrap:wrap}.kpi-card{padding:10px;border:1px solid #dfe8df;border-radius:8px}.kpi-card span,.kpi-card strong{display:block}.kpi-card strong{font-size:20px;color:#2e806c}.metric-grid{display:grid;grid-template-columns:1fr;gap:12px}.metric-chart{border:1px solid #e1e9e1;padding:12px;break-inside:avoid;margin:10px 0}.metric-chart figcaption{font-weight:bold}.viz-svg{width:100%;max-height:680px}.svg-label,.svg-value{font-size:11px;fill:#38534d}.svg-tick{font-size:10px;fill:#77867e}.donut-layout{display:flex;gap:18px;align-items:center}.donut-svg{width:190px}.donut-total{font-size:29px;font-weight:bold}.donut-caption{font-size:12px}.donut-legend{flex:1}.donut-legend-row{display:flex;gap:8px;margin:6px 0}.donut-legend-row i{display:block;width:10px;height:10px;flex:none}.donut-legend-row b{margin-left:auto}.purchase-advice{margin-top:12px;padding:10px;border-left:3px solid #2e806c;background:#f3f7f4}.message-meta{color:#55786a;font-size:12px;margin-bottom:10px}.sample-mark{color:#986833}.table-frame{margin:10px 0;overflow:visible;border:0}.table-viewport{max-height:none!important;overflow:visible!important}.table-x-track{display:none!important}.table-frame table{width:100%;table-layout:fixed;white-space:normal!important;font-size:9px}.table-frame th,.table-frame td{white-space:normal!important;overflow-wrap:anywhere;word-break:break-word;min-width:0!important;max-width:none!important;vertical-align:top}.chart-plot-viewport{max-height:none!important;overflow:visible!important}.viz-svg{max-height:none!important}`;
         const html = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>采策采购决策分析</title><style>'+style+'</style></head><body>'+content.innerHTML+'</body></html>';
         const href = URL.createObjectURL(new Blob([html],{type:"text/html;charset=utf-8"}));
         const file = Object.assign(document.createElement("a"),{href,download:fileBase+"-图文决策报告.html"});
@@ -225,6 +309,7 @@ function addMessage(role, text, {sample=false, error=false, scenario=null, previ
     bubble.append(tools);
   }
   $("feed").append(row);
+  enableTableFrames(row);
   return row;
 }
 
@@ -237,6 +322,54 @@ function field(name, label, attrs="", options=null) {
 
 function requestLabel(option) {
   return option.company + " · " + option.product + " · " + option.quantity + "件";
+}
+
+// Popup picker: full-page overlay avoids clipping by the bottom input composer.
+let requestPickerMatches=[];
+let requestPickerActive=-1;
+let requestPickerFocusReturn=null;
+function openRequestPicker() {
+  if (!optionsReady) return;
+  requestPickerFocusReturn=document.activeElement;
+  const modal=$("request-picker");
+  modal.hidden=false;
+  document.body.classList.add("request-picker-open");
+  const trigger=$("fields").querySelector("[data-request-picker-open]");
+  trigger?.setAttribute("aria-expanded","true");
+  $("request-picker-search").value="";
+  requestPickerActive=-1;
+  renderRequestPicker();
+  $("request-picker-search").focus();
+}
+function closeRequestPicker() {
+  const modal=$("request-picker");
+  if (!modal || modal.hidden) return;
+  modal.hidden=true;
+  document.body.classList.remove("request-picker-open");
+  $("fields").querySelector("[data-request-picker-open]")?.setAttribute("aria-expanded","false");
+  const target=requestPickerFocusReturn;
+  requestPickerFocusReturn=null;
+  if (target?.isConnected && typeof target.focus==="function") target.focus();
+  else $("fields").querySelector("[data-request-picker-open]")?.focus();
+}
+function renderRequestPicker() {
+  const query=$("request-picker-search").value.trim();
+  requestPickerMatches=procurementOptions.filter(option=>fuzzyMatch(query,[option.company,option.product,requestLabel(option)]));
+  const list=$("request-picker-options");
+  $("request-picker-count").textContent=query ? "匹配 "+requestPickerMatches.length+" 条采购需求" : "全部 "+requestPickerMatches.length+" 条采购需求";
+  if (requestPickerActive>=requestPickerMatches.length) requestPickerActive=-1;
+  list.innerHTML=requestPickerMatches.length?requestPickerMatches.map((option,index)=>
+    '<button type="button" class="request-picker-option'+(values.request_id===option.id?' is-selected':'')+(index===requestPickerActive?' is-active':'')+'" data-request-picker-index="'+index+'" role="option" aria-selected="'+(values.request_id===option.id)+'">'+
+    '<span class="request-picker-option-main">'+esc(option.company)+'</span>'+
+    '<span class="request-picker-option-sub">'+esc(option.product)+' · '+esc(option.quantity)+'件</span>'+
+    (values.request_id===option.id?'<span class="request-picker-selected">已选择</span>':'')+'</button>').join('')
+    :'<div class="request-picker-empty">没有匹配的采购需求，请尝试公司名称、产品名称或其中的关键词。</div>';
+  list.setAttribute("aria-busy","false");
+}
+function selectRequestPickerOption(index) {
+  const option=requestPickerMatches[index];
+  if (!option) return;
+  applyRequestOption(option);
 }
 
 function searchKey(value) {
@@ -267,6 +400,18 @@ function comboSearchText(name, option) {
   return name === "request_id"
     ? [option.company, option.product, requestLabel(option)]
     : [option.name];
+}
+
+function requestPickerField({locked=false}={}) {
+  const selected=procurementOptions.find(option=>option.id===values.request_id);
+  const main=selected?.company || (locked ? "请先运行断供模拟" : optionsReady ? "点击选择采购需求" : "正在读取采购需求…");
+  const sub=selected?selected.product+" · "+selected.quantity+"件":(locked?"与本次断供情景关联":"支持搜索企业或产品，并可展开浏览全部选项");
+  const disabled=locked || !optionsReady;
+  return '<div class="field request-picker-field"><span>采购需求</span>'+
+    '<button class="request-picker-trigger" type="button" data-request-picker-open aria-haspopup="dialog" aria-controls="request-picker" aria-expanded="false" '+(disabled?'disabled':'')+'>'+
+    '<span class="request-picker-text"><strong>'+esc(main)+'</strong><small>'+esc(sub)+'</small></span>'+
+    '<span class="request-picker-arrow" aria-hidden="true">'+(locked?'🔒':'⌄')+'</span></button>'+
+    '<input type="hidden" name="request_id" value="'+esc(values.request_id)+'"></div>';
 }
 
 function comboField(name, label, {locked=false, placeholder=""}={}) {
@@ -451,13 +596,8 @@ function applyRequestOption(option, {preserveScenario=false, rerender=true}={}) 
     clearSupplierSelection();
     if (values.shortage_source === "simulation") values.shortage_source = "manual";
   }
-  const root = $("fields").querySelector('[data-combo-root="request_id"]');
-  if (root) {
-    root.querySelector('[data-combo-input="request_id"]').value = comboLabels.request_id;
-    root.querySelector('[data-combo-value="request_id"]').value = option.id;
-    closeCombo(root);
-  }
   if (rerender) renderFields();
+  closeRequestPicker();
   if (active.id === "disruption_sim") void loadSupplierOptions(option.id,{rerender:true});
   else syncRunButton();
 }
@@ -496,7 +636,7 @@ function exactComboMatches(name, query) {
 
 function ensureComboSelection(name) {
   const root = $("fields").querySelector('[data-combo-root="'+name+'"]');
-  if (!root) return true;
+  if (!root) return name === "request_id" ? procurementOptions.some(item=>item.id===values.request_id) : true;
   const input = root.querySelector("[data-combo-input]");
   const hidden = root.querySelector("[data-combo-value]");
   if (hidden.value && comboLabels[name] && input.value === comboLabels[name]) return true;
@@ -517,7 +657,7 @@ function renderFields() {
   const fromDisruption = active.id === "quote_delivery";
   const simulationRecovery = active.id === "shortage_recovery" && values.shortage_source === "simulation";
   const requestLocked = fromDisruption || simulationRecovery;
-  let fields = comboField("request_id","采购需求",{locked:requestLocked});
+  let fields = requestPickerField({locked:requestLocked});
   if (!fromDisruption) fields += field("evaluation_date","评估日期（选填）",'type="date"');
   if (active.id === "disruption_sim") {
     fields += comboField("disrupted_supplier_id","断供企业");
@@ -617,7 +757,7 @@ async function fillExample() {
       renderFields();
     }
   }
-  $("fields").querySelector('[data-combo-input="request_id"]')?.focus();
+  $("fields").querySelector("[data-request-picker-open]")?.focus();
 }
 
 function syncRunButton() {
@@ -680,8 +820,49 @@ $("toggle-sidebar").onclick = () => sidebar($("toggle-sidebar").getAttribute("ar
 $("backdrop").onclick = () => sidebar(false);
 const viewport = matchMedia("(max-width:750px)");
 viewport.addEventListener("change",()=>sidebar(!viewport.matches));
+$("fields").addEventListener("click",event=>{
+  if (event.target.closest("[data-request-picker-open]")) openRequestPicker();
+});
+$("request-picker-close").addEventListener("click",closeRequestPicker);
+$("request-picker-backdrop").addEventListener("click",closeRequestPicker);
+$("request-picker-search").addEventListener("input",()=>{requestPickerActive=-1;renderRequestPicker();});
+$("request-picker-show-all").addEventListener("click",()=>{
+  $("request-picker-search").value="";
+  requestPickerActive=-1;
+  renderRequestPicker();
+  $("request-picker-search").focus();
+});
+$("request-picker-options").addEventListener("click",event=>{
+  const button=event.target.closest("[data-request-picker-index]");
+  if (button) selectRequestPickerOption(Number(button.dataset.requestPickerIndex));
+});
+$("request-picker").addEventListener("keydown",event=>{
+  if (event.key==="Escape") {event.preventDefault();closeRequestPicker();return;}
+  if (event.key==="Tab") {
+    const focusable=[...$("request-picker").querySelectorAll('button:not([disabled]),input:not([disabled])')].filter(element=>element.getClientRects().length);
+    if (!focusable.length) return;
+    if (event.shiftKey && document.activeElement===focusable[0]) {event.preventDefault();focusable.at(-1).focus();}
+    else if (!event.shiftKey && document.activeElement===focusable.at(-1)) {event.preventDefault();focusable[0].focus();}
+  }
+  if (event.target!==$("request-picker-search")) return;
+  if (event.key==="ArrowDown" || event.key==="ArrowUp") {
+    if (!requestPickerMatches.length) return;
+    event.preventDefault();
+    const step=event.key==="ArrowDown"?1:-1;
+    requestPickerActive=(requestPickerActive+step+requestPickerMatches.length)%requestPickerMatches.length;
+    renderRequestPicker();
+    $("request-picker-options").querySelector(".is-active")?.scrollIntoView({block:"nearest"});
+  } else if (event.key==="Enter") {
+    event.preventDefault();
+    if (requestPickerActive>=0) selectRequestPickerOption(requestPickerActive);
+    else if (requestPickerMatches.length===1) selectRequestPickerOption(0);
+    else $("request-picker-options").querySelector("[role=option]")?.focus();
+  }
+});
+
 $("example").onclick = fillExample;
 $("new-chat").onclick = () => {
+  closeRequestPicker();
   controller?.abort();
   controller = null;
   busy = false;

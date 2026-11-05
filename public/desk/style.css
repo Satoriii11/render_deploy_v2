@@ -183,3 +183,68 @@ h1 span {color:#43766a;margin-left:.1em}
 
 .viz-svg,.donut-svg {stroke:none;fill:none}
 .viz-svg text,.donut-svg text {stroke:none}
+
+/* V5: readable data tables, fixed vertical viewport and persistent horizontal drag track. */
+.bubble .table-frame {width:100%;max-width:100%;margin:13px 0 18px;border:1px solid #dce6dc;border-radius:11px;overflow:hidden;background:#fff}
+.bubble .table-viewport {width:100%;max-height:355px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.bubble .table-frame table {min-width:100%;width:max-content;max-width:none;table-layout:auto;border-collapse:separate;border-spacing:0;font-size:12px;white-space:normal}
+.bubble .table-frame th,.bubble .table-frame td {min-width:90px;max-width:270px;padding:9px 11px;white-space:normal;overflow-wrap:anywhere;word-break:break-word;line-height:1.55;vertical-align:top;border-bottom:1px solid #e6ede6}
+.bubble .table-frame th {position:sticky;top:0;z-index:1;line-height:1.45;background:#e9f2ec;color:#2e6051}
+.bubble .table-frame th:first-child,.bubble .table-frame td:first-child {min-width:145px}
+.bubble .table-frame th:last-child,.bubble .table-frame td:last-child {min-width:178px;max-width:310px}
+.table-x-track {position:relative;height:21px;background:#edf3ef;border-top:1px solid #dce7dc;cursor:grab;touch-action:none;user-select:none}
+.table-x-track:active {cursor:grabbing}
+.table-x-thumb {position:absolute;top:4px;left:0;height:12px;border-radius:8px;background:#71968a;border:1px solid #50796e;box-shadow:0 1px 3px #234b3c22;min-width:28px}
+.table-x-track:hover .table-x-thumb,.table-x-track:focus-visible .table-x-thumb {background:#397d69}
+.table-x-track.no-overflow {opacity:.4;cursor:default}
+.table-x-track.no-overflow .table-x-thumb {background:#b6c8bd;border-color:#b6c8bd}
+.chart-plot-viewport {max-height:510px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain}
+.metric-chart .chart-plot-viewport .viz-svg {width:100%;height:auto;max-height:none;overflow:visible}
+.svg-label {font-size:11px;overflow:visible}
+/* V5: full-width request picker trigger, selection modal with searchable and scrollable choices. */
+.request-picker-field {grid-column:span 2}
+.request-picker-trigger {width:100%;min-height:52px;display:flex;align-items:center;justify-content:space-between;gap:9px;padding:8px 10px;border:1px solid #cdded4;border-radius:9px;background:#f7faf7;text-align:left;color:#24453f}
+.request-picker-trigger:hover:not(:disabled) {border-color:#63a18b;background:#f0f7f1}
+.request-picker-trigger:disabled {opacity:.82;color:#62756e;cursor:not-allowed}
+.request-picker-text {display:grid;gap:3px;min-width:0;flex:1;overflow-wrap:anywhere;word-break:break-word}
+.request-picker-text strong {font-size:12px;line-height:1.5;font-weight:760;white-space:normal}
+.request-picker-text small {font-size:11px;color:#5b756e;line-height:1.45;white-space:normal}
+.request-picker-arrow {flex:none;color:#497c6a;font-size:20px}
+body.request-picker-open {overflow:hidden}
+.request-picker-overlay {position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:20px}
+.request-picker-backdrop {position:absolute;inset:0;border:0;background:#0f292d8a;cursor:default}
+.request-picker-dialog {position:relative;z-index:1;display:flex;flex-direction:column;width:min(650px,100%);max-height:min(82dvh,750px);min-height:280px;background:white;border-radius:18px;box-shadow:0 26px 75px #09271d55;overflow:hidden;border:1px solid #d7e3d8}
+.request-picker-header {display:flex;align-items:flex-start;justify-content:space-between;padding:18px 22px 10px;gap:14px}
+.request-picker-header h2 {font-size:20px;margin:0;color:#214d41}
+.request-picker-header p {margin:5px 0 0;color:#67817a;font-size:12px}
+.request-picker-close {width:32px;height:32px;flex:none;border:0;border-radius:9px;background:#f1f5f0;color:#487266;font-size:24px;line-height:1}
+.request-picker-close:hover {background:#e4ede7}
+.request-picker-filter {padding:6px 22px 12px;border-bottom:1px solid #e2ebe3}
+.request-picker-filter label {display:block;font-size:12px;font-weight:700;color:#4b7265;margin-bottom:7px}
+.request-picker-search-row {display:flex;gap:8px}
+.request-picker-search-row input {flex:1;min-width:0;min-height:45px;padding:9px 12px;border:1px solid #cadcd2;border-radius:10px;font-size:14px;background:#fafdff;color:#1a3c35}
+.request-picker-search-row input:focus {outline:2px solid #7bb7a1;outline-offset:0}
+.request-picker-search-row button {flex:none;padding:7px 13px;border:1px solid #d2e2d7;border-radius:10px;background:#eaf3eb;color:#2e6a56;font-weight:750;font-size:12px}
+.request-picker-search-row button:hover {background:#dbeee0}
+.request-picker-count {font-size:11px;color:#6c8076;margin:7px 0 0}
+.request-picker-options {min-height:90px;flex:1;overflow-y:auto;padding:9px 12px;overscroll-behavior:contain}
+.request-picker-option {position:relative;display:grid;gap:4px;width:100%;padding:13px 14px;margin:1px 0;border:1px solid transparent;border-radius:11px;background:#fff;text-align:left;color:#20423b;cursor:pointer;overflow-wrap:anywhere}
+.request-picker-option:hover,.request-picker-option.is-active,.request-picker-option:focus-visible {background:#f0f7f2;border-color:#d9e9de}
+.request-picker-option.is-selected {background:#e9f3eb;border-color:#b3d7bf}
+.request-picker-option-main {font-size:14px;font-weight:780;line-height:1.5;white-space:normal}
+.request-picker-option-sub {font-size:12px;color:#58756a;line-height:1.5;white-space:normal}
+.request-picker-selected {position:absolute;right:12px;top:14px;font-size:10px;color:#35745a;background:#d9e9dd;border-radius:5px;padding:2px 5px}
+.request-picker-option.is-selected .request-picker-option-main {padding-right:60px}
+.request-picker-empty {padding:28px 12px;text-align:center;color:#74877f;font-size:13px;line-height:1.6}
+.request-picker-footer {border-top:1px solid #e5ede6;background:#f9fbf9;padding:11px 22px;color:#72827a;font-size:11px;line-height:1.5}
+@media (max-width:750px) {
+  .request-picker-overlay {padding:10px}
+  .request-picker-dialog {max-height:90dvh;border-radius:13px}
+  .request-picker-header {padding:15px 14px 8px}
+  .request-picker-filter {padding:6px 14px 10px}
+  .request-picker-header h2 {font-size:18px}
+  .request-picker-options {padding:7px}
+  .request-picker-footer {padding:9px 14px}
+  .bubble .table-viewport {max-height:300px}
+  .bubble .table-frame th,.bubble .table-frame td {min-width:85px;max-width:230px}
+}
