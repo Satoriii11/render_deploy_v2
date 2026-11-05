@@ -63,5 +63,24 @@
       </footer>
     </main>
   </div>
+  <section class="request-picker-overlay" id="request-picker" hidden aria-label="选择采购需求">
+    <button type="button" class="request-picker-backdrop" id="request-picker-backdrop" aria-label="关闭采购需求选择弹窗"></button>
+    <div class="request-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="request-picker-heading" aria-describedby="request-picker-description">
+      <header class="request-picker-header">
+        <div><h2 id="request-picker-heading">选择采购需求</h2><p id="request-picker-description">搜索企业或产品，也可以浏览全部采购需求</p></div>
+        <button type="button" class="request-picker-close" id="request-picker-close" aria-label="关闭选择窗口">×</button>
+      </header>
+      <div class="request-picker-filter">
+        <label for="request-picker-search">搜索公司或产品</label>
+        <div class="request-picker-search-row">
+          <input id="request-picker-search" type="search" autocomplete="off" placeholder="例如：南京普天、贴片电阻、10kΩ" aria-controls="request-picker-options">
+          <button type="button" id="request-picker-show-all" aria-label="展开全部采购需求">全部 ▾</button>
+        </div>
+        <p id="request-picker-count" class="request-picker-count" aria-live="polite"></p>
+      </div>
+      <div class="request-picker-options" id="request-picker-options" role="listbox" aria-label="采购需求列表"></div>
+      <div class="request-picker-footer">选择后将自动返回分析表单；按 Esc 可以关闭窗口。</div>
+    </div>
+  </section>
 </body>
 </html>
