@@ -1,0 +1,13 @@
+{
+  "name": "procurement-desk",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --env-file-if-exists=.env.local server.mjs"
+  }
+}

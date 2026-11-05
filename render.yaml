@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: procurement-desk
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/status
+    envVars:
+      - key: DIFY_API_KEY
+        sync: false
