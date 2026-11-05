@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {riskPresentation,optimizePresentation,recoveryPresentation,humanizeText} from '../lib/presentation.mjs';
+import {decisionReport,delayAnalysis} from '../lib/decision.mjs';
+const req={id:'REQ-001',company:'示例采购企业',product:'示例元器件',quantity:117};
+const cat={requests:[req],supplierNames:new Map([['COM-023','示例供应商']]),productNames:new Map([['ELE-0001','示例元器件'],['SIM-ALT-0001-A','示例元器件（升级款）']])};
+const risk=riskPresentation({suppliers:[{supplier_id:'COM-023',supplier_name:'示例供应商',delivery_risk_D:10,quality_risk_Q:20,concentration_risk_S:30,best_eligible_risk:21,quotes:[{sku_id:'ELE-0001',capacity:30,delivery_date:'2026-11-15',cost_risk_C:22,total_risk_R:21,risk_level:'低风险',auto_eligible:true,reasons:[]}]}]},cat,req);
+assert.match(risk.answer,/交付D/);assert.match(risk.answer,/成本C/);assert.equal(risk.charts[0].points.length,1);
+const plan={total_quantity:117,total_cost:4894.29,average_risk:24.5,budget_remaining:500,allocation:[{supplier_name:'示例供应商',quantity:117,subtotal:4894.29,risk:24.5}]};
+const purchase=optimizePresentation({demand:117,cost_plan:plan,risk_plan:{...plan,total_cost:5200,average_risk:23.2}},cat,req);
+assert.equal(purchase.charts.length,3);
+const recovery=recoveryPresentation({recovery:{shortage_quantity:19,remaining_budget:1000,confirmed_extra_quantity:0,recovery_actions:[]},candidate:{candidates:[{sku_id:'SIM-ALT-0001-A',category:'PENDING_ENGINEERING',technical_difference:'容量升级'}]},feasibility:{evaluated_quotes:[{supplier_name:'示例供应商',sku_id:'SIM-ALT-0001-A',status:'PENDING_APPROVAL_AND_CONFIRMATION',possible_quantity_before_approval:19,estimated_incremental_cost:850}],confirmed_extra_quantity:0}},cat,req);
+assert.match(recovery.answer,/条件性可行报价明细/);assert.match(recovery.answer,/示例元器件（升级款）/);
+const basePlan={fulfilled_quantity:98,unmet_quantity:19,total_cost:4000,average_risk:25,allocation:[]};
+const scenario={request_id:'REQ-001',request_info:{company:req.company,product:req.product,quantity:117},demand:117,budget:5000,disrupted_supplier_name:'示例供应商',disruption_rate:1,reoptimized_cost_plan:basePlan,reoptimized_risk_plan:basePlan,delay:{deadline:'2026-11-15',evaluationDate:'2026-11-01',pools:[],quotes:[{id:'QUOTE-X',supplierId:'COM-023',supplier:'示例供应商',arrival:'2026-11-17',capacity:25,pool:'',unit:4000,fixed:0}]}};
+const disruption=decisionReport(scenario,{comparisons:{}});assert.ok(disruption.charts.some(c=>c.type==='donut'));
+const delay=delayAnalysis(scenario,'cost',12);assert.equal(delay.charts[0].type,'line');assert.ok(delay.charts[0].points.some(p=>p.x===2&&p.value===0));assert.doesNotMatch(delay.answer,/QUOTE-X/);
+assert.equal(humanizeText('采购请求 REQ-001，企业 COM-023，物料 ELE-0001。',cat),'采购请求 示例采购企业的示例元器件采购需求，企业 示例供应商，物料 示例元器件。');
+console.log('PASS: supplier risk, purchase optimization, disruption, recovery, delay scenarios, chart types, ID-to-name presentation');
