@@ -1,12 +1,35 @@
 # 采策 · 智能采购助手
 
-这个仓库用于在 Render 上部署采策网页。采购分析由已发布的 Dify Chatflow 执行，延期补货测算沿用断供重优化的剩余产能与预算。访客可用采购请求编号运行分析，数据由工作流自动读取。
+这个仓库用于在 Render 上部署采策网页。采购分析由已发布的 Dify Chatflow 执行，延期补货测算沿用断供重优化的剩余产能与预算。采购需求和候选供应商由 Render 后端从与 Dify 工作流相同的 GitHub Excel 数据源读取，前端以企业名称、产品名称和件数展示；内部请求/供应商 ID 仅保留在请求载荷中用于工作流关联。
 
-## 功能升级版
+## 当前功能
 
-1. 在「断供模拟」指定供应商和断供比例。报告对比断供前与重优化后的成本优先、风险优先方案，展示覆盖量、缺口、满足率、支出、风险和集中度（HHI），并给出采购建议。可下载 Markdown 决策报告。
-2. 如果重优化仍有缺口，从报告点击「测算延期能否补齐」。选择方案后，比较 0、3、5、7、10 天和自定义延期的可补量、剩余缺口及增量成本，查看能补齐的最早日期和对应报价。
-3. 如需评估替代料，在「缺口恢复」引用断供结果或直接填写缺口与预算。供应商风险与采购优化仍可独立运行。
+1. 五个功能模块共用可搜索、可展开的采购需求选择框。选项仅显示采购企业名称、产品名称和净采购需求件数。
+2. 断供模拟先选择采购需求，再选择该请求报价数据中出现的有效候选供应商。供应商下拉框仅显示企业名称。
+3. 搜索支持企业名称、产品名称的关键词匹配和连续子序列匹配。输入完整且唯一的企业/产品名称时可直接解析；匹配不唯一或仅为模糊片段时，需要用户从下拉列表确认。
+4. 缺口恢复引用断供结果、报价交期引用断供情景时，采购需求自动锁定，避免将不同采购请求的数据混用。
+5. 原有五功能 Dify 调用、断供情景令牌和延期补货计算逻辑保持不变。
+
+## 采购选项数据接口
+
+Render 后端新增只读接口：
+
+- `GET /api/options`：返回可选采购需求，字段为内部 `id`、采购企业名称、产品名称和净采购需求件数。`id` 供前端隐藏保存并在提交时传给后端，不在下拉框展示。
+- `GET /api/options?request_id=REQ-001`：返回该采购请求下的全部候选供应商，字段为内部 `id` 和企业名称。列表口径与当前 Dify 风险评估/断供合法性检查一致：对该请求的供应商报价行按供应企业 ID 去重；不在前端擅自增加新的自动采购资格筛选条件。
+
+接口读取以下两份 GitHub Excel，工作表名称固定：
+
+| 数据文件 | 工作表 | 用途 |
+| --- | --- | --- |
+| `06_用户缺货采购请求_完整补齐并重算预算.xlsx` | `缺货采购请求` | 采购企业、产品、净采购需求 |
+| `03_供应商报价_重算价格.xlsx` | `供应商模拟报价` | 当前请求下的候选供应商 |
+
+后端在进程内缓存解析结果 5 分钟，避免每次打开下拉框都重新下载 Excel。数据源地址默认与当前 Dify 工作流的 HTTP 下载节点一致；如需更换仓库文件，可在 Render 环境变量中设置：
+
+- `PROCUREMENT_REQUESTS_XLSX_URL`
+- `PROCUREMENT_QUOTES_XLSX_URL`
+
+更新 GitHub Excel 后，缓存最多约 5 分钟自动刷新。`/api/analyze` 也会在调用 Dify 前校验采购请求和断供供应商是否仍属于数据源中的有效选项。
 
 ## 部署到 Render
 
@@ -15,22 +38,29 @@
 | 设置 | 值 |
 | --- | --- |
 | Runtime | Node |
-| Build Command | npm ci |
-| Start Command | npm start |
-| Health Check Path | /api/status |
-| Environment | 已配置的 DIFY_API_KEY |
+| Build Command | `npm ci` |
+| Start Command | `npm start` |
+| Health Check Path | `/api/status` |
+| Environment | 已配置的 `DIFY_API_KEY` |
 
-Render 会提供 PORT 和 RENDER_EXTERNAL_URL。使用自定义域名时可把 PUBLIC_ORIGIN 设置为该域名的 HTTPS 源，例如 https://procure.example.com。
+Render 会提供 `PORT` 和 `RENDER_EXTERNAL_URL`。使用自定义域名时可把 `PUBLIC_ORIGIN` 设置为该域名的 HTTPS 源，例如 `https://procure.example.com`。
 
-首次部署也可以从 Render 的 Blueprint 入口连接本仓库。仓库里的 render.yaml 会创建 Node Web Service 并提示填写 DIFY_API_KEY。已经有服务时可以直接使用上表配置，继续用原服务的环境变量。
+首次部署也可以从 Render 的 Blueprint 入口连接本仓库。仓库里的 `render.yaml` 会创建 Node Web Service 并提示填写 `DIFY_API_KEY`。已经有服务时可以直接使用上表配置，继续用原服务的环境变量。
 
-将压缩包解开后，把源码文件放在 Render 所连 GitHub 仓库的根目录。`DIFY_API_KEY` 应使用已发布的五功能 Chatflow 的应用密钥。报告与延期测算读取该 Chatflow 的断供、采购重优化和韧性节点输出。如果另建了 Chatflow 或重新创建过这些节点，需先核对 `lib/procurement.mjs` 的节点 ID 和变量名。
+将压缩包解开后，把源码文件放在 Render 所连 GitHub 仓库的根目录。`DIFY_API_KEY` 应使用已发布的五功能 Chatflow 的应用密钥。报告与延期测算仍读取该 Chatflow 的断供、采购重优化和韧性节点输出。如果另建了 Chatflow 或重新创建过这些节点，需先核对 `lib/procurement.mjs` 的节点 ID 和变量名。
 
-部署完成后打开 Render 生成的网址。用 REQ-001 运行一次「供应商风险」。想演示完整断供链路时，选择「断供模拟」，填入供应商 COM-023、断供比例 1，然后在报告中选择「测算延期能否补齐」。
+部署完成后打开 Render 生成的网址。先确认采购需求下拉框能正常加载；再选择一个采购需求，进入「断供模拟」检查供应商下拉框是否只显示该需求下的候选企业。完成选择后再运行分析。
 
 ## 本机运行
 
-需要 Node.js 22.13 或更高版本。运行 npm run dev 后打开 http://127.0.0.1:4173/。本机可复制 .env.example 为 .env.local，然后在文件中填写密钥。留空时本机使用演示数据。
+需要 Node.js 22.13 或更高版本。运行 `npm run dev` 后打开 `http://127.0.0.1:4173/`。本机可复制 `.env.example` 为 `.env.local`，填写 Dify 密钥和可选数据源地址。留空时本机使用演示分析逻辑，但采购下拉选项仍需要能访问 GitHub 数据源。
 
 [Render Web Services](https://render.com/docs/web-services) · [Render 环境变量](https://render.com/docs/configure-environment-variables)
 
+## 第二、三阶段升级（本包）
+
+本包已增加五模块完整结构化结果展示、供应商/产品去编号、真实 SVG 柱状图/环形图/折线图、缺口恢复三节点汇总与延期关键日期视图。断供报告可下载 Markdown，另可下载含 SVG 的图文 HTML，再用浏览器打印为 PDF。Dify 工作流无需替换。
+
+- 详细改动与测试边界：`CHANGELOG_PHASE2_3.md`
+- 不联网的快速自检：`node tests/smoke.mjs`
+- 本版只在 Render 增加显示层逻辑；采购模型计算和风险公式依旧由 Dify 负责。

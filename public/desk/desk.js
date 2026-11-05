@@ -19,6 +19,16 @@ let busy = false;
 let controller;
 let latestScenario = null;
 let sequence = 0;
+let procurementOptions = [];
+let supplierOptions = [];
+let supplierOptionsRequestId = "";
+let supplierLoading = false;
+let optionsReady = false;
+let optionsError = "";
+const supplierCache = new Map();
+const supplierPending = new Map();
+const comboLabels = {request_id:"", disrupted_supplier_id:""};
+const comboQueries = {request_id:"", disrupted_supplier_id:""};
 
 function inline(value) {
   return esc(value).replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>").replace(/\x60([^\x60]+)\x60/g,"<code>$1</code>");
@@ -65,18 +75,70 @@ function markdown(text) {
 }
 
 function chartMarkup(charts) {
-  const cards = (charts ?? []).filter(chart=>chart.points.length).map(chart=>{
-    const max = chart.unit === "%" ? 100 : chart.title.includes("HHI") ? 1 : Math.max(1,...chart.points.map(point=>point.value));
-    const format = new Intl.NumberFormat("zh-CN",{maximumFractionDigits:chart.digits ?? 2});
-    return '<figure class="metric-chart"><figcaption>' + esc(chart.title) + '</figcaption>' +
-      chart.points.map(point=>{
-        const value = format.format(point.value) + (chart.unit ? " " + chart.unit : "");
-        return '<div class="chart-row"><span>' + esc(point.label) + '</span><meter min="0" max="' + max +
-          '" value="' + Math.max(0,point.value) + '" aria-label="' + esc(point.label + " " + value) +
-          '" title="' + esc(value) + '"></meter><strong>' + esc(value) + '</strong></div>';
-      }).join("") + "</figure>";
-  });
-  return cards.length ? '<section class="metric-grid" aria-label="对比图表">' + cards.join("") + '</section>' : "";
+  const palette = ["#2e806c","#6088ba","#e5a25c","#9177b2","#65a4a0","#c77375","#89966a"];
+  const numeric = new Intl.NumberFormat("zh-CN",{maximumFractionDigits:2});
+  const display = (value,unit="") => numeric.format(value) + (unit ? " "+unit : "");
+  const chartTitle = value => esc(value || "指标图表");
+  const pct = (n,d) => d > 0 ? Math.max(0,n/d) : 0;
+  const maxValue = values => Math.max(1,...values.map(p=>Math.max(0,Number(p.value)||0)));
+  function barSvg(chart,points) {
+    const count=points.length, h=52+count*40, max=maxValue(points);
+    const labelW=204, left=labelW+11, plot=310, scale=plot/max;
+    let shapes='';
+    for (const [index,point] of points.entries()) {
+      const v=Math.max(0,Number(point.value)||0),y=43+index*40;
+      const short=point.label.length>15 ? point.label.slice(0,14)+"…" : point.label;
+      shapes += '<g><title>'+esc(point.label+" · "+display(v,chart.unit))+'</title>'+ 
+        '<text x="'+(labelW-5)+'" y="'+(y+15)+'" text-anchor="end" class="svg-label">'+esc(short)+'</text>'+
+        '<rect x="'+left+'" y="'+y+'" width="'+plot+'" height="20" rx="5" fill="#e7eeeb"/>'+
+        '<rect x="'+left+'" y="'+y+'" width="'+Math.max(v?2:0,v*scale).toFixed(2)+'" height="20" rx="5" fill="'+palette[index%palette.length]+'"/>'+
+        '<text x="'+(left+plot+11)+'" y="'+(y+15)+'" class="svg-value">'+esc(display(v,chart.unit))+'</text></g>';
+    }
+    return '<svg class="viz-svg" role="img" aria-label="'+chartTitle(chart.title)+'" viewBox="0 0 640 '+h+'" preserveAspectRatio="xMinYMin meet">'+shapes+'</svg>';
+  }
+  function lineSvg(chart,points) {
+    const width=640,height=260, left=58,right=620,top=24,bottom=204;
+    const max=maxValue(points)*1.08;
+    const xs=points.map((p,i)=>Number.isFinite(Number(p.x)) ? Number(p.x) : i);
+    const xmin=Math.min(...xs),xmax=Math.max(...xs),range=Math.max(1,xmax-xmin);
+    const xCoord=x=>left+(x-xmin)/range*(right-left);
+    const yCoord=y=>bottom-Math.max(0,Number(y)||0)/max*(bottom-top);
+    const poly=points.map((p,i)=>(i?'L':'M')+xCoord(xs[i]).toFixed(1)+' '+yCoord(p.value).toFixed(1)).join(' ');
+    let shapes='';
+    for (let i=0;i<=4;i++) {const v=max*i/4,y=yCoord(v);shapes+='<line x1="'+left+'" x2="'+right+'" y1="'+y+'" y2="'+y+'" stroke="#e6ebe7"/><text x="'+(left-9)+'" y="'+(y+4)+'" text-anchor="end" class="svg-tick">'+esc(numeric.format(v))+'</text>';}
+    shapes+='<path d="'+poly+'" fill="none" stroke="#2e806c" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/>';
+    const stride=Math.max(1,Math.ceil(points.length/9));
+    points.forEach((p,i)=>{const x=xCoord(xs[i]),y=yCoord(p.value);
+      shapes+='<g><title>'+esc(p.label+": "+display(p.value,chart.unit))+'</title><circle cx="'+x+'" cy="'+y+'" r="4.5" fill="#fff" stroke="#2e806c" stroke-width="2.5"/>'+
+        (i%stride===0||i===points.length-1 ? '<text x="'+x+'" y="'+(bottom+22)+'" text-anchor="middle" class="svg-tick">'+esc(p.label)+'</text>':'')+'</g>';});
+    return '<svg class="viz-svg" role="img" aria-label="'+chartTitle(chart.title)+'" viewBox="0 0 '+width+' '+height+'">'+shapes+'</svg>';
+  }
+  function donutSvg(chart,points) {
+    const r=76,c=2*Math.PI*r, total=points.reduce((s,p)=>s+Math.max(0,Number(p.value)||0),0);
+    let offset=0, circles='';
+    for (const [i,p] of points.entries()) {
+      const share=pct(Number(p.value),total),length=share*c;
+      circles+='<circle cx="116" cy="116" r="'+r+'" fill="none" stroke="'+palette[i%palette.length]+'" stroke-width="27" stroke-dasharray="'+length.toFixed(2)+' '+Math.max(0,c-length).toFixed(2)+'" stroke-dashoffset="'+(-offset).toFixed(2)+'" transform="rotate(-90 116 116)"><title>'+esc(p.label+" · "+display(p.value,chart.unit))+'</title></circle>';
+      offset+=length;
+    }
+    const legend=points.map((p,i)=>'<div class="donut-legend-row"><i style="background:'+palette[i%palette.length]+'"></i><span>'+esc(p.label)+'</span><b>'+esc(display(p.value,chart.unit))+'</b></div>').join('');
+    return '<div class="donut-layout"><svg class="donut-svg" viewBox="0 0 232 232" role="img" aria-label="'+chartTitle(chart.title)+'"><circle cx="116" cy="116" r="'+r+'" fill="none" stroke="#e9eeea" stroke-width="27"/>'+circles+'<text x="116" y="110" text-anchor="middle" class="donut-total">'+esc(numeric.format(total))+'</text><text x="116" y="134" text-anchor="middle" class="donut-caption">'+esc(chart.unit||"合计")+'</text></svg><div class="donut-legend">'+legend+'</div></div>';
+  }
+  const cards=(Array.isArray(charts)?charts:[]).map(chart=>{
+    const points=(Array.isArray(chart.points)?chart.points:[]).filter(point=>Number.isFinite(Number(point.value)));
+    if (!points.length) return '';
+    const type=chart.type || "bar";
+    const body=type==="line" ? lineSvg(chart,points) : type==="donut" ? donutSvg(chart,points) : barSvg(chart,points);
+    return '<figure class="metric-chart '+(type==="donut"?'chart-donut':'')+'"><figcaption>'+chartTitle(chart.title)+'</figcaption>'+body+'</figure>';
+  }).filter(Boolean);
+  return cards.length?'<section class="metric-grid" aria-label="统计图表">'+cards.join('')+'</section>':'';
+}
+
+function kpiMarkup(kpis) {
+  if (!Array.isArray(kpis)||!kpis.length) return "";
+  return '<section class="kpi-grid" aria-label="关键采购指标">'+kpis.map(item=>
+    '<div class="kpi-card"><span>'+esc(item.label)+'</span><strong>'+esc(item.value)+'</strong>'+
+    (item.note?'<small>'+esc(item.note)+'</small>':'')+'</div>').join('')+'</section>';
 }
 
 function scenarioAction(label, scenario, feature) {
@@ -86,15 +148,18 @@ function scenarioAction(label, scenario, feature) {
   action.onclick = () => {
     latestScenario = scenario;
     values.request_id = scenario.request_id;
+    const request = procurementOptions.find(item => item.id === scenario.request_id);
+    comboLabels.request_id = request ? requestLabel(request) : "本次断供采购需求";
+    comboQueries.request_id = comboLabels.request_id;
     values.shortage_source = "simulation";
     values.scenario_plan = scenario.gaps?.cost > 0 ? "cost" : "risk";
     selectFeature(feature);
-    $("fields").querySelector("select, input:not([readonly])")?.focus();
+    $("fields").querySelector("select, input:not([readonly]):not([disabled])")?.focus();
   };
   return action;
 }
 
-function addMessage(role, text, {sample=false, error=false, scenario=null, preview=false, charts, advice, report=false, requestId}={}) {
+function addMessage(role, text, {sample=false, error=false, scenario=null, preview=false, charts, kpis, advice, report=false, requestName}={}) {
   const row = document.createElement("article");
   row.className = "message " + role + (error ? " error" : "");
   row.id = "message-" + (++sequence);
@@ -106,7 +171,9 @@ function addMessage(role, text, {sample=false, error=false, scenario=null, previ
     const bubble = row.querySelector(".bubble");
     const chartSection = chartMarkup(charts);
     const body = bubble.querySelector(".message-meta");
-    if (chartSection) body.insertAdjacentHTML("afterend",chartSection);
+    const kpiSection = kpiMarkup(kpis);
+    if (kpiSection) body.insertAdjacentHTML("afterend",kpiSection);
+    if (chartSection) bubble.insertAdjacentHTML("beforeend",chartSection);
     if (advice?.length) {
       bubble.insertAdjacentHTML("beforeend",'<section class="purchase-advice"><h4>采购建议</h4><ul>' +
         advice.map(item=>"<li>" + esc(item) + "</li>").join("") + "</ul></section>");
@@ -125,7 +192,8 @@ function addMessage(role, text, {sample=false, error=false, scenario=null, previ
     if (report) {
       const download = document.createElement("a");
       download.textContent = "下载决策报告";
-      download.download = requestId + "-断供重优化决策报告.md";
+      const fileBase = String(requestName || "采购需求").replace(/[\\/:*?"<>|]/g,"_").replace(/\s+/g," ").slice(0,80);
+      download.download = fileBase + "-断供重优化决策报告.md";
       download.href = "#";
       download.onclick = event => {
         event.preventDefault();
@@ -135,6 +203,20 @@ function addMessage(role, text, {sample=false, error=false, scenario=null, previ
         setTimeout(()=>URL.revokeObjectURL(href),1000);
       };
       tools.append(download);
+      const visual = document.createElement("button");
+      visual.type = "button";
+      visual.innerHTML = svg("copy") + "下载图文报告";
+      visual.onclick = () => {
+        const content = bubble.cloneNode(true);
+        content.querySelector(".message-tools")?.remove();
+        const style = `@page{size:A4;margin:17mm}body{font:13px/1.7 "Microsoft YaHei",sans-serif;color:#1d3540;margin:0 auto;max-width:950px}h3{color:#295c51;margin-top:20px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #dae5da;padding:6px;text-align:left}th{background:#edf4ed}.table-wrap{overflow-wrap:break-word;margin:12px 0;overflow-x:auto}.kpi-grid{display:flex;gap:10px;flex-wrap:wrap}.kpi-card{padding:10px;border:1px solid #dfe8df;border-radius:8px}.kpi-card span,.kpi-card strong{display:block}.kpi-card strong{font-size:20px;color:#2e806c}.metric-grid{display:grid;grid-template-columns:1fr;gap:12px}.metric-chart{border:1px solid #e1e9e1;padding:12px;break-inside:avoid;margin:10px 0}.metric-chart figcaption{font-weight:bold}.viz-svg{width:100%;max-height:680px}.svg-label,.svg-value{font-size:11px;fill:#38534d}.svg-tick{font-size:10px;fill:#77867e}.donut-layout{display:flex;gap:18px;align-items:center}.donut-svg{width:190px}.donut-total{font-size:29px;font-weight:bold}.donut-caption{font-size:12px}.donut-legend{flex:1}.donut-legend-row{display:flex;gap:8px;margin:6px 0}.donut-legend-row i{display:block;width:10px;height:10px;flex:none}.donut-legend-row b{margin-left:auto}.purchase-advice{margin-top:12px;padding:10px;border-left:3px solid #2e806c;background:#f3f7f4}.message-meta{color:#55786a;font-size:12px;margin-bottom:10px}.sample-mark{color:#986833}`;
+        const html = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>采策采购决策分析</title><style>'+style+'</style></head><body>'+content.innerHTML+'</body></html>';
+        const href = URL.createObjectURL(new Blob([html],{type:"text/html;charset=utf-8"}));
+        const file = Object.assign(document.createElement("a"),{href,download:fileBase+"-图文决策报告.html"});
+        file.click();
+        setTimeout(()=>URL.revokeObjectURL(href),1000);
+      };
+      tools.append(visual);
     }
     if (scenario && Object.values(scenario.gaps ?? {}).some(gap=>gap > 0)) {
       tools.append(scenarioAction("测算延期能否补齐",scenario,"quote_delivery"),
@@ -148,19 +230,297 @@ function addMessage(role, text, {sample=false, error=false, scenario=null, previ
 
 function field(name, label, attrs="", options=null) {
   const value = esc(values[name] ?? "");
-  const control = options ? '<select name="'+name+'">'+options.map(([v,l])=>'<option value="'+v+'" '+(v===values[name]?"selected":"")+'>'+l+'</option>').join("")+'</select>'
+  const control = options ? '<select name="'+name+'">'+options.map(([v,l])=>'<option value="'+v+'" '+(v===values[name]?"selected":"")+'>'+esc(l)+'</option>').join("")+'</select>'
     : '<input name="'+name+'" value="'+value+'" '+attrs+'>';
-  return '<label class="field"><span>'+label+'</span>'+control+'</label>';
+  return '<label class="field"><span>'+esc(label)+'</span>'+control+'</label>';
+}
+
+function requestLabel(option) {
+  return option.company + " · " + option.product + " · " + option.quantity + "件";
+}
+
+function searchKey(value) {
+  return String(value ?? "").toLocaleLowerCase("zh-CN").replace(/[\s·,，、。；;：:()（）\-_/]+/g, "");
+}
+
+function fuzzyMatch(query, candidates) {
+  const q = searchKey(query);
+  if (!q) return true;
+  return candidates.some(value => {
+    const candidate = searchKey(value);
+    if (candidate.includes(q)) return true;
+    let position = 0;
+    for (const char of q) {
+      position = candidate.indexOf(char, position);
+      if (position < 0) return false;
+      position++;
+    }
+    return true;
+  });
+}
+
+function comboOptions(name) {
+  return name === "request_id" ? procurementOptions : supplierOptions;
+}
+
+function comboSearchText(name, option) {
+  return name === "request_id"
+    ? [option.company, option.product, requestLabel(option)]
+    : [option.name];
+}
+
+function comboField(name, label, {locked=false, placeholder=""}={}) {
+  const isRequest = name === "request_id";
+  const selectedId = values[name] || "";
+  const selected = isRequest
+    ? procurementOptions.find(item => item.id === selectedId)
+    : supplierOptions.find(item => item.id === selectedId);
+  const selectedText = comboLabels[name] || (selected ? (isRequest ? requestLabel(selected) : selected.name) : "");
+  const query = comboQueries[name] || selectedText;
+  const unavailable = !optionsReady || (name === "disrupted_supplier_id" && (!values.request_id || supplierLoading || supplierOptionsRequestId !== values.request_id || supplierOptions.length === 0));
+  const disabled = locked || unavailable;
+  const defaultPlaceholder = isRequest
+    ? (optionsReady ? "搜索企业或产品名称，也可展开查看" : "正在读取采购需求…")
+    : (!values.request_id ? "请先选择采购需求" : supplierLoading ? "正在读取候选供应商…" : supplierOptions.length ? "搜索或展开当前需求的候选企业" : "当前采购需求暂无有效候选企业");
+  const value = locked ? (selectedText || (latestScenario ? "本次断供采购需求" : "先运行断供模拟")) : query;
+  const id = "combo-list-" + name;
+  return '<div class="field combo-field"><span>'+esc(label)+'</span>' +
+    '<div class="combo" data-combo-root="'+name+'">' +
+      '<div class="combo-control">' +
+        '<input class="combo-input" type="text" data-combo-input="'+name+'" value="'+esc(value)+'" placeholder="'+esc(placeholder || defaultPlaceholder)+'" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="'+id+'" '+(disabled?'disabled':'')+(locked?' readonly':'')+'>' +
+        '<button class="combo-toggle" type="button" data-combo-toggle="'+name+'" aria-label="展开'+esc(label)+'选项" aria-expanded="false" '+(disabled?'disabled':'')+'>▾</button>' +
+      '</div>' +
+      '<input type="hidden" name="'+name+'" data-combo-value="'+name+'" value="'+esc(selectedId)+'">' +
+      '<div class="combo-menu" id="'+id+'" role="listbox" hidden></div>' +
+    '</div></div>';
+}
+
+function closeCombo(root) {
+  if (!root) return;
+  const input = root.querySelector("[data-combo-input]");
+  const toggle = root.querySelector("[data-combo-toggle]");
+  const menu = root.querySelector(".combo-menu");
+  menu.hidden = true;
+  root.classList.remove("is-open");
+  input?.setAttribute("aria-expanded", "false");
+  toggle?.setAttribute("aria-expanded", "false");
+  root._activeIndex = -1;
+}
+
+function renderComboMenu(root) {
+  const name = root.dataset.comboRoot;
+  const input = root.querySelector("[data-combo-input]");
+  const menu = root.querySelector(".combo-menu");
+  const options = comboOptions(name);
+  const rawQuery = input.value.trim();
+  const query = rawQuery === comboLabels[name] ? "" : rawQuery;
+  const matches = options.map((option,index)=>({option,index}))
+    .filter(({option})=>fuzzyMatch(query,comboSearchText(name,option)));
+  root._filteredOptions = matches.map(item=>item.option);
+  root._activeIndex = matches.length ? Math.min(root._activeIndex ?? -1,matches.length-1) : -1;
+  if (!options.length) {
+    const message = name === "disrupted_supplier_id"
+      ? (supplierLoading ? "正在读取候选供应商…" : "请先选择采购需求，系统将读取其有效候选企业。")
+      : (optionsError || "暂无可选采购需求。");
+    menu.innerHTML = '<div class="combo-empty">'+esc(message)+'</div>';
+    return;
+  }
+  if (!matches.length) {
+    menu.innerHTML = '<div class="combo-empty">没有找到匹配项。请尝试其他关键词，或从下拉列表选择。</div>';
+    return;
+  }
+  menu.innerHTML = matches.map(({option,index},visibleIndex)=>{
+    const selected = values[name] === option.id;
+    const activeClass = visibleIndex === root._activeIndex ? " is-active" : "";
+    if (name === "request_id") {
+      return '<button type="button" class="combo-option'+activeClass+'" role="option" aria-selected="'+selected+'" data-option-index="'+visibleIndex+'">' +
+        '<span class="combo-option-main">'+esc(option.company)+'</span>' +
+        '<span class="combo-option-sub">'+esc(option.product)+' · '+esc(option.quantity)+'件</span></button>';
+    }
+    return '<button type="button" class="combo-option'+activeClass+'" role="option" aria-selected="'+selected+'" data-option-index="'+visibleIndex+'"><span class="combo-option-main">'+esc(option.name)+'</span></button>';
+  }).join("");
+}
+
+function openCombo(root) {
+  if (!root) return;
+  const input = root.querySelector("[data-combo-input]");
+  if (!input || input.disabled || input.readOnly) return;
+  renderComboMenu(root);
+  const menu = root.querySelector(".combo-menu");
+  const toggle = root.querySelector("[data-combo-toggle]");
+  menu.hidden = false;
+  root.classList.add("is-open");
+  input.setAttribute("aria-expanded", "true");
+  toggle?.setAttribute("aria-expanded", "true");
+}
+
+function clearSupplierSelection() {
+  values.disrupted_supplier_id = "";
+  comboLabels.disrupted_supplier_id = "";
+  comboQueries.disrupted_supplier_id = "";
+  supplierOptions = [];
+  supplierOptionsRequestId = "";
+  supplierLoading = false;
+  const hidden = $("fields").querySelector('[data-combo-value="disrupted_supplier_id"]');
+  const input = $("fields").querySelector('[data-combo-input="disrupted_supplier_id"]');
+  if (hidden) hidden.value = "";
+  if (input) {input.value = ""; input.disabled = true; input.placeholder = "请先选择采购需求";}
+}
+
+async function loadSupplierOptions(requestId, {rerender=true}={}) {
+  if (!requestId) return [];
+  if (supplierCache.has(requestId)) {
+    supplierOptions = supplierCache.get(requestId).map(item=>({...item}));
+    supplierOptionsRequestId = requestId;
+    supplierLoading = false;
+    if (rerender && active.id === "disruption_sim") renderFields();
+    syncRunButton();
+    return supplierOptions;
+  }
+  if (supplierPending.has(requestId)) {
+    try {
+      const pending = await supplierPending.get(requestId);
+      if (values.request_id === requestId) {
+        supplierOptions = pending.map(item=>({...item}));
+        supplierOptionsRequestId = requestId;
+        supplierLoading = false;
+        if (rerender && active.id === "disruption_sim") renderFields();
+        syncRunButton();
+      }
+      return pending;
+    } catch (error) {
+      if (values.request_id === requestId) {
+        supplierOptions = [];
+        supplierOptionsRequestId = requestId;
+        supplierLoading = false;
+        optionsError = error.message || "候选供应商读取失败。";
+        if (rerender && active.id === "disruption_sim") renderFields();
+        syncRunButton();
+      }
+      return [];
+    }
+  }
+  supplierLoading = true;
+  supplierOptions = [];
+  supplierOptionsRequestId = requestId;
+  if (rerender && active.id === "disruption_sim") renderFields();
+  const pending = (async () => {
+    const response = await fetch("/api/options?request_id="+encodeURIComponent(requestId),{cache:"no-store"});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "候选供应商读取失败。");
+    return Array.isArray(data.suppliers) ? data.suppliers : [];
+  })();
+  supplierPending.set(requestId,pending);
+  try {
+    const list = await pending;
+    supplierCache.set(requestId,list.map(item=>({...item})));
+    if (values.request_id !== requestId) return [];
+    supplierOptions = list;
+    supplierOptionsRequestId = requestId;
+    supplierLoading = false;
+    optionsError = "";
+    if (values.disrupted_supplier_id && !supplierOptions.some(item=>item.id===values.disrupted_supplier_id)) {
+      values.disrupted_supplier_id = "";
+      comboLabels.disrupted_supplier_id = "";
+      comboQueries.disrupted_supplier_id = "";
+    }
+    if (rerender && active.id === "disruption_sim") renderFields();
+    else syncRunButton();
+    return supplierOptions;
+  } catch (error) {
+    if (values.request_id !== requestId) return [];
+    supplierOptions = [];
+    supplierOptionsRequestId = requestId;
+    supplierLoading = false;
+    optionsError = error.message || "候选供应商读取失败。";
+    if (rerender && active.id === "disruption_sim") renderFields();
+    else syncRunButton();
+    return [];
+  } finally {
+    supplierPending.delete(requestId);
+  }
+}
+
+function applyRequestOption(option, {preserveScenario=false, rerender=true}={}) {
+  const previous = values.request_id;
+  values.request_id = option.id;
+  comboLabels.request_id = requestLabel(option);
+  comboQueries.request_id = comboLabels.request_id;
+  if (previous !== option.id && !preserveScenario) {
+    latestScenario = null;
+    clearSupplierSelection();
+    if (values.shortage_source === "simulation") values.shortage_source = "manual";
+  }
+  const root = $("fields").querySelector('[data-combo-root="request_id"]');
+  if (root) {
+    root.querySelector('[data-combo-input="request_id"]').value = comboLabels.request_id;
+    root.querySelector('[data-combo-value="request_id"]').value = option.id;
+    closeCombo(root);
+  }
+  if (rerender) renderFields();
+  if (active.id === "disruption_sim") void loadSupplierOptions(option.id,{rerender:true});
+  else syncRunButton();
+}
+
+function applySupplierOption(root, option) {
+  values.disrupted_supplier_id = option.id;
+  comboLabels.disrupted_supplier_id = option.name;
+  comboQueries.disrupted_supplier_id = option.name;
+  root.querySelector('[data-combo-input="disrupted_supplier_id"]').value = option.name;
+  root.querySelector('[data-combo-value="disrupted_supplier_id"]').value = option.id;
+  closeCombo(root);
+  syncRunButton();
+}
+
+function selectComboOption(root, visibleIndex) {
+  const option = root._filteredOptions?.[visibleIndex];
+  if (!option) return;
+  const name = root.dataset.comboRoot;
+  if (name === "request_id") {
+    applyRequestOption(option);
+    return;
+  }
+  applySupplierOption(root,option);
+}
+
+function exactComboMatches(name, query) {
+  const q = searchKey(query);
+  if (!q) return [];
+  return comboOptions(name).filter(option => {
+    const valuesToMatch = name === "request_id"
+      ? [option.company, option.product, requestLabel(option)]
+      : [option.name];
+    return valuesToMatch.some(value => searchKey(value) === q);
+  });
+}
+
+function ensureComboSelection(name) {
+  const root = $("fields").querySelector('[data-combo-root="'+name+'"]');
+  if (!root) return true;
+  const input = root.querySelector("[data-combo-input]");
+  const hidden = root.querySelector("[data-combo-value]");
+  if (hidden.value && comboLabels[name] && input.value === comboLabels[name]) return true;
+  const matches = exactComboMatches(name,input.value);
+  if (matches.length === 1) {
+    if (name === "request_id") applyRequestOption(matches[0]);
+    else applySupplierOption(root,matches[0]);
+    return Boolean(values[name]);
+  }
+  openCombo(root);
+  input.setCustomValidity(matches.length > 1 ? "匹配到多个结果，请从下拉列表中选择具体采购需求。" : "请从下拉列表选择有效的企业或采购需求。");
+  input.reportValidity();
+  input.setCustomValidity("");
+  return false;
 }
 
 function renderFields() {
   const fromDisruption = active.id === "quote_delivery";
-  let fields = field("request_id","采购请求编号", fromDisruption
-    ? 'readonly placeholder="先运行断供模拟"'
-    : 'required placeholder="如 REQ-001" maxlength="7" autocomplete="off"');
+  const simulationRecovery = active.id === "shortage_recovery" && values.shortage_source === "simulation";
+  const requestLocked = fromDisruption || simulationRecovery;
+  let fields = comboField("request_id","采购需求",{locked:requestLocked});
   if (!fromDisruption) fields += field("evaluation_date","评估日期（选填）",'type="date"');
   if (active.id === "disruption_sim") {
-    fields += field("disrupted_supplier_id","断供供应商 ID",'required maxlength="80" placeholder="如 SUP-001"');
+    fields += comboField("disrupted_supplier_id","断供企业");
     fields += field("disruption_rate","断供比例（0–1）",'type="number" required min="0.001" max="1" step="any"');
   }
   if (active.id === "shortage_recovery") {
@@ -184,14 +544,14 @@ function renderFields() {
   }
   $("fields").innerHTML = fields;
   const hints = {
-    supplier_risk:"输入采购请求编号，评估日期留空时使用北京时间当天。",
-    purchase_optimize:"结果同时给出成本优先和风险优先的方案。",
-    disruption_sim:"比例填 1 表示完全断供。供应商 ID 可在你的采购数据里查询。",
-    shortage_recovery: values.shortage_source === "simulation" ? "将引用采购单 " + latestScenario.request_id + " 的本次断供结果。" : "按采购请求填写当前缺口和可用预算。",
-    quote_delivery:latestScenario ? "比较 0、3、5、7、10 天及自定义窗口，沿用断供评估日和已分配采购量。"
+    supplier_risk:"输入企业或产品关键词，选择对应采购需求；也可以展开列表浏览。",
+    purchase_optimize:"选择采购企业、产品和需求件数；结果同时给出成本优先和风险优先方案。",
+    disruption_sim:"先选择采购需求，再从该需求下的有效候选供应商中选择断供企业。比例填 1 表示完全断供。",
+    shortage_recovery: values.shortage_source === "simulation" ? "已锁定本次断供分析对应的采购需求，将引用该情景的重优化结果。" : "选择需要恢复的采购需求，再填写当前缺口和可用预算。",
+    quote_delivery:latestScenario ? "已锁定本次断供采购需求；比较 0、3、5、7、10 天及自定义窗口。"
       : "先在「断供模拟」生成重优化报告，再回来评估剩余缺口。",
   };
-  $("form-hint").textContent = hints[active.id];
+  $("form-hint").textContent = optionsError || hints[active.id];
   $("example").hidden = fromDisruption && !latestScenario;
   syncRunButton();
 }
@@ -208,7 +568,16 @@ function selectFeature(id) {
   const next = features.find(f => f.id === id);
   if (!next) return;
   active = next;
-  if (id === "quote_delivery") values.request_id = latestScenario?.request_id || values.request_id;
+  if (id === "quote_delivery") values.request_id = latestScenario?.request_id || "";
+  if (id === "shortage_recovery" && values.shortage_source === "simulation") values.request_id = latestScenario?.request_id || "";
+  const selectedRequest = procurementOptions.find(item=>item.id===values.request_id);
+  if (selectedRequest) {
+    comboLabels.request_id = requestLabel(selectedRequest);
+    comboQueries.request_id = comboLabels.request_id;
+  } else if (id === "quote_delivery" || (id === "shortage_recovery" && values.shortage_source === "simulation")) {
+    comboLabels.request_id = "";
+    comboQueries.request_id = "";
+  }
   for (const button of $("features").querySelectorAll("button")) button.setAttribute("aria-pressed", String(button.dataset.feature === id));
   $("crumb").textContent = next.short;
   $("form-title").textContent = next.short;
@@ -216,37 +585,80 @@ function selectFeature(id) {
   $("topic-id").textContent = "0" + (features.indexOf(next)+1);
   $("description").textContent = next.desc;
   renderFields();
+  if (id === "disruption_sim" && values.request_id && supplierOptionsRequestId !== values.request_id) void loadSupplierOptions(values.request_id,{rerender:true});
   if (matchMedia("(max-width:750px)").matches) sidebar(false);
 }
 
 function intro() {
-  addMessage("assistant", "### 从一张采购单开始\n输入采购请求编号，再从侧栏选择需要的分析。每次提交都会在这里显示单独的结果。", {preview:true});
+  addMessage("assistant", "### 从一项采购需求开始\n选择采购企业和产品，也可以输入关键词搜索。再从侧栏选择需要的分析。每次提交都会在这里显示单独的结果。", {preview:true});
 }
 
-function fillExample() {
+async function fillExample() {
   if (active.id === "quote_delivery") {
     values.extension_days = "12";
     renderFields();
-    $("fields").querySelector("[name=extension_days]").focus();
+    $("fields").querySelector("[name=extension_days]")?.focus();
     return;
   }
-  Object.assign(values, {request_id:"REQ-001", disrupted_supplier_id:demo ? "SUP-001" : "COM-023", disruption_rate:"1",
-    shortage_source:"manual", shortage_quantity:"20", remaining_budget:"3200", extension_days:"12"});
-  renderFields();
-  $("fields").querySelector("[name=request_id]").focus();
+  const request = procurementOptions.find(item=>item.id==="REQ-001") || procurementOptions[0];
+  if (!request) {
+    addMessage("assistant",optionsError || "采购需求列表尚未加载完成，请稍后重试。",{error:true});
+    return;
+  }
+  Object.assign(values,{evaluation_date:"",disruption_rate:"1",shortage_source:"manual",shortage_quantity:"20",remaining_budget:"3200",extension_days:"12"});
+  applyRequestOption(request,{rerender:true});
+  if (active.id === "disruption_sim") {
+    const candidates = await loadSupplierOptions(request.id,{rerender:true});
+    const preferred = candidates.find(item=>item.id==="COM-023") || candidates[0];
+    if (preferred) {
+      values.disrupted_supplier_id = preferred.id;
+      comboLabels.disrupted_supplier_id = preferred.name;
+      comboQueries.disrupted_supplier_id = preferred.name;
+      renderFields();
+    }
+  }
+  $("fields").querySelector('[data-combo-input="request_id"]')?.focus();
 }
 
 function syncRunButton() {
-  $("run").disabled = !available || busy || (active.id === "quote_delivery" && !latestScenario);
+  const requestValid = optionsReady && procurementOptions.some(item=>item.id===values.request_id);
+  const scenarioLocked = active.id === "quote_delivery" || (active.id === "shortage_recovery" && values.shortage_source === "simulation");
+  const scenarioValid = !scenarioLocked || Boolean(latestScenario && latestScenario.request_id === values.request_id);
+  const supplierValid = active.id !== "disruption_sim" || (
+    supplierOptionsRequestId === values.request_id && supplierOptions.some(item=>item.id===values.disrupted_supplier_id)
+  );
+  $("run").disabled = !available || busy || !requestValid || !scenarioValid || !supplierValid;
 }
 
 function setStatus(online, serviceAvailable = true) {
   demo = !online;
   connecting = false;
   available = serviceAvailable;
-  $("status").classList.toggle("live", online);
-  $("status").querySelector("span").textContent = online ? "Dify 已配置" : available ? "演示模式" : "连接状态未知";
   syncRunButton();
+}
+
+async function loadRequestOptions() {
+  optionsReady = false;
+  optionsError = "";
+  renderFields();
+  try {
+    const response = await fetch("/api/options",{cache:"no-store"});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "采购需求读取失败。");
+    procurementOptions = Array.isArray(data.requests) ? data.requests : [];
+    if (!procurementOptions.length) throw new Error("当前没有可供选择的采购需求。");
+    optionsReady = true;
+    const selected = procurementOptions.find(item=>item.id===values.request_id);
+    if (selected) {
+      comboLabels.request_id = requestLabel(selected);
+      comboQueries.request_id = comboLabels.request_id;
+    }
+    if (active.id === "disruption_sim" && values.request_id) await loadSupplierOptions(values.request_id,{rerender:false});
+  } catch (error) {
+    optionsError = error.message || "采购选项读取失败，请刷新页面重试。";
+    optionsReady = false;
+  }
+  renderFields();
 }
 
 function scrollToEnd() {
@@ -276,27 +688,141 @@ $("new-chat").onclick = () => {
   $("run").querySelector("span").textContent = "开始分析";
   latestScenario = null;
   values = {...defaults};
+  comboLabels.request_id = "";
+  comboLabels.disrupted_supplier_id = "";
+  comboQueries.request_id = "";
+  comboQueries.disrupted_supplier_id = "";
+  supplierOptions = [];
+  supplierOptionsRequestId = "";
+  supplierLoading = false;
   $("feed").replaceChildren();
   $("recent").textContent = "提交后将在这里显示运行记录";
   selectFeature(features[0].id);
   intro();
+  if (!optionsReady) void loadRequestOptions();
   $("scroll").scrollTop = 0;
 };
 $("fields").addEventListener("input", event => {
+  const comboInput = event.target.closest("[data-combo-input]");
+  if (comboInput) {
+    const name = comboInput.dataset.comboInput;
+    const root = comboInput.closest("[data-combo-root]");
+    comboQueries[name] = comboInput.value;
+    const hidden = root.querySelector("[data-combo-value]");
+    if (name === "request_id" && values.request_id && comboInput.value !== comboLabels.request_id) {
+      values.request_id = "";
+      comboLabels.request_id = "";
+      hidden.value = "";
+      latestScenario = null;
+      clearSupplierSelection();
+      if (values.shortage_source === "simulation") values.shortage_source = "manual";
+    } else if (name === "disrupted_supplier_id" && values.disrupted_supplier_id && comboInput.value !== comboLabels.disrupted_supplier_id) {
+      values.disrupted_supplier_id = "";
+      comboLabels.disrupted_supplier_id = "";
+      hidden.value = "";
+    }
+    root._activeIndex = -1;
+    openCombo(root);
+    syncRunButton();
+    return;
+  }
   const {name,value} = event.target;
   if (name) values[name] = value;
-  if (name === "shortage_source") renderFields();
+  if (name === "shortage_source") {
+    if (value === "simulation" && latestScenario) {
+      values.request_id = latestScenario.request_id;
+      const request = procurementOptions.find(item=>item.id===values.request_id);
+      if (request) comboLabels.request_id = comboQueries.request_id = requestLabel(request);
+    }
+    renderFields();
+  }
+});
+
+$("fields").addEventListener("change", event => {
+  const {name,value} = event.target;
+  if (name && !event.target.matches("[data-combo-input]")) values[name] = value;
+  if (name === "shortage_source") {
+    if (value === "simulation" && latestScenario) {
+      values.request_id = latestScenario.request_id;
+      const request = procurementOptions.find(item=>item.id===values.request_id);
+      if (request) comboLabels.request_id = comboQueries.request_id = requestLabel(request);
+    }
+    renderFields();
+  }
+});
+
+$("fields").addEventListener("click", event => {
+  const option = event.target.closest("[data-option-index]");
+  if (option) {
+    const root = option.closest("[data-combo-root]");
+    selectComboOption(root,Number(option.dataset.optionIndex));
+    return;
+  }
+  const toggle = event.target.closest("[data-combo-toggle]");
+  if (toggle) {
+    const root = toggle.closest("[data-combo-root]");
+    const menu = root.querySelector(".combo-menu");
+    if (menu.hidden) openCombo(root); else closeCombo(root);
+  }
+});
+
+$("fields").addEventListener("focusin", event => {
+  const input = event.target.closest("[data-combo-input]");
+  if (input && !input.disabled && !input.readOnly) {
+    if (comboLabels[input.dataset.comboInput] && input.value === comboLabels[input.dataset.comboInput]) input.select();
+    openCombo(input.closest("[data-combo-root]"));
+  }
+});
+
+$("fields").addEventListener("keydown", event => {
+  const input = event.target.closest("[data-combo-input]");
+  if (!input) return;
+  const root = input.closest("[data-combo-root]");
+  const menu = root.querySelector(".combo-menu");
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    if (menu.hidden) openCombo(root);
+    const count = root._filteredOptions?.length || 0;
+    if (count) {
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      root._activeIndex = ((root._activeIndex ?? -1) + delta + count) % count;
+      renderComboMenu(root);
+      menu.querySelectorAll(".combo-option").forEach((item,index)=>item.classList.toggle("is-active",index===root._activeIndex));
+      menu.querySelector(".is-active")?.scrollIntoView({block:"nearest"});
+    }
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    if (!menu.hidden && root._activeIndex >= 0) selectComboOption(root,root._activeIndex);
+    else {
+      const matches = exactComboMatches(root.dataset.comboRoot,input.value);
+      if (matches.length === 1) {
+        if (root.dataset.comboRoot === "request_id") applyRequestOption(matches[0]);
+        else {
+          const index = (root._filteredOptions || []).findIndex(item=>item.id===matches[0].id);
+          if (index >= 0) selectComboOption(root,index);
+        }
+      } else openCombo(root);
+    }
+  } else if (event.key === "Escape") {
+    closeCombo(root);
+  }
+});
+
+document.addEventListener("click", event => {
+  if (!event.target.closest("[data-combo-root]")) {
+    $("fields").querySelectorAll("[data-combo-root]").forEach(closeCombo);
+  }
 });
 $("run-form").addEventListener("submit", async event => {
   event.preventDefault();
   if (busy || connecting || !available) return;
   const selected = active;
-  const requestId = values.request_id.trim().toUpperCase();
-  if (!/^REQ-\d{3}$/.test(requestId)) {
-    const input = $("fields").querySelector("[name=request_id]");
-    input.setCustomValidity("采购请求编号格式应为 REQ-001");
-    input.reportValidity();
-    input.setCustomValidity("");
+  const requestLocked = selected.id === "quote_delivery" || (selected.id === "shortage_recovery" && values.shortage_source === "simulation");
+  if (!requestLocked && !ensureComboSelection("request_id")) return;
+  if (selected.id === "disruption_sim" && !ensureComboSelection("disrupted_supplier_id")) return;
+  const requestId = values.request_id;
+  if (!requestId || !procurementOptions.some(item=>item.id===requestId)) {
+    addMessage("assistant","请选择有效的采购需求后再运行。",{error:true});
     return;
   }
   const payload = Object.fromEntries(new FormData($("run-form")));
@@ -304,7 +830,8 @@ $("run-form").addEventListener("submit", async event => {
   if (selected.id === "quote_delivery" || payload.shortage_source === "simulation") payload.scenario_token = latestScenario?.token;
   const localController = new AbortController();
   controller = localController;
-  const label = requestId + " · " + selected.short;
+  const selectedRequest = procurementOptions.find(item=>item.id===requestId);
+  const label = (selectedRequest ? requestLabel(selectedRequest) : "本次断供采购需求") + " · " + selected.short;
   addMessage("user", label);
   const wait = addMessage("assistant","正在运行" + selected.short + "…", {preview:true});
   busy = true;
@@ -322,7 +849,8 @@ $("run-form").addEventListener("submit", async event => {
       if (["shortage_recovery","quote_delivery"].includes(active.id)) renderFields();
     }
     const answer = addMessage("assistant",result.answer,{sample:result.demo,scenario:result.scenario_token ? latestScenario : null,
-      charts:result.charts,advice:result.advice,report:result.report,requestId});
+      charts:result.charts,kpis:result.kpis,advice:result.advice,report:result.report,
+      requestName:selectedRequest ? selectedRequest.company + "-" + selectedRequest.product : "采购需求"});
     appendRecent(label, answer);
   } catch (error) {
     if (error.name !== "AbortError" && controller === localController) {
@@ -343,6 +871,7 @@ sidebar(!viewport.matches);
 selectFeature(features[0].id);
 intro();
 $("run").disabled = true;
+void loadRequestOptions();
 try {
   const response = await fetch("/api/status", {cache:"no-store"});
   if (!response.ok) throw new Error();
